@@ -1,0 +1,20 @@
+name = "telegram-downloader-bot"
+main = "src/index.js"
+compatibility_date = "2024-11-01"
+
+# Public, non-secret config. Secrets go through `wrangler secret put` instead
+# (see the README), never in this file.
+[vars]
+# Cobalt instance(s) used to resolve media. One URL, or several separated by
+# commas and tried in order. Leave this unset to use the built-in public
+# instances, or point it at your own self-hosted cobalt for reliability.
+# COBALT_API_URL = "https://your-cobalt.example.com"
+
+# Optional file_id cache (see the README for why you'd want it). Create the
+# namespace once with:
+#   wrangler kv namespace create MEDIA_CACHE
+# then paste the printed id below and uncomment both lines. Without it the bot
+# still works; it just re-downloads media it has sent before.
+# [[kv_namespaces]]
+# binding = "MEDIA_CACHE"
+# id = "paste-the-id-from-the-command-here"
