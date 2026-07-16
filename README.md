@@ -9,7 +9,6 @@ Runs entirely on a [Cloudflare Worker](https://workers.dev). No server to rent, 
 ![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)
 ![JavaScript](https://img.shields.io/badge/JavaScript-ES%20Modules-F7DF1E?logo=javascript&logoColor=black)
 ![Telegram Bot API](https://img.shields.io/badge/Telegram-Bot%20API-26A5E4?logo=telegram&logoColor=white)
-![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
 
 </div>
 
@@ -42,7 +41,7 @@ Message [@BotFather](https://t.me/BotFather), send `/newbot`, and copy the token
 ### 2. Install and log in
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/telegram-downloader-bot.git
+git clone https://github.com/mahanshafaei/telegram-downloader-bot.git
 cd telegram-downloader-bot
 npm install
 npx wrangler login
