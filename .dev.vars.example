@@ -1,6 +1,0 @@
-# Copy this file to `.dev.vars` for local `wrangler dev`.
-# `.dev.vars` is git-ignored; never commit real secrets.
-BOT_TOKEN = "123456:your-bot-token-from-botfather"
-WEBHOOK_SECRET = "a-long-random-string"
-# COBALT_API_URL = "https://your-cobalt.example.com"
-# COBALT_API_KEY = "only-if-your-instance-requires-one"

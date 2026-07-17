@@ -2,13 +2,16 @@
 
 # 🎬 Telegram Downloader Bot
 
-**Download media from Instagram, TikTok, Pinterest, and YouTube — straight into any Telegram chat.**
+**Send a link, get the video or audio back — right in your Telegram chat.**
 
-Runs entirely on a [Cloudflare Worker](https://workers.dev). No server to rent, no container to keep alive, free for most personal use.
+Powered by [yt-dlp](https://github.com/yt-dlp/yt-dlp), so it handles YouTube, X/Twitter, Instagram, TikTok, Reddit and [1,800+ other sites](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md). Runs as a small Node process — deploy it to [Railway](https://railway.app) in a couple of minutes.
 
-![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)
-![JavaScript](https://img.shields.io/badge/JavaScript-ES%20Modules-F7DF1E?logo=javascript&logoColor=black)
+![Node.js](https://img.shields.io/badge/Node.js-18%2B-339933?logo=node.js&logoColor=white)
+![yt-dlp](https://img.shields.io/badge/yt--dlp-powered-red?logo=youtube&logoColor=white)
+![ffmpeg](https://img.shields.io/badge/ffmpeg-merging%20%2B%20mp3-007808?logo=ffmpeg&logoColor=white)
 ![Telegram Bot API](https://img.shields.io/badge/Telegram-Bot%20API-26A5E4?logo=telegram&logoColor=white)
+![Railway](https://img.shields.io/badge/Deploy-Railway-0B0D0E?logo=railway&logoColor=white)
+![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
 
 </div>
 
@@ -16,63 +19,49 @@ Runs entirely on a [Cloudflare Worker](https://workers.dev). No server to rent, 
 
 ## ✨ Features
 
-| Platform | What you get |
-|----------|--------------|
-| 📷 **Instagram** | Reels and photo posts, including multi-image albums |
-| 🎵 **TikTok** | Videos without the watermark |
-| 📌 **Pinterest** | Images and videos |
-| ▶️ **YouTube** | Pick a quality (360p / 720p / 1080p) or grab audio only |
-
+- 🌍 **1,800+ sites** via yt-dlp — YouTube, X/Twitter, Instagram, TikTok, Threads, Reddit, Vimeo, Twitch, Facebook and more
+- 🎚️ **Quality picker** — every link comes back with a list of resolutions (each showing its estimated size) plus an audio-only MP3 option
+- 🎵 **Audio extraction** — grab just the sound as an MP3, ffmpeg does the conversion
 - 💬 Works in **private chats and groups**
-- ⚡ Optional **file cache** — anything sent once is re-sent instantly
-- 🔒 Webhook secured with a secret token
-- 🪶 Zero dependencies at runtime, deploys in seconds
+- 🔔 **Live progress** — the bot edits its message as the download runs
+- 🪶 **Zero runtime npm dependencies** — just Node, yt-dlp, and ffmpeg
+
+> **Heads up on file size:** the bot downloads the file and uploads it to Telegram itself, so it's bound by **Telegram's 50 MB bot-upload limit**. The quality picker marks any option that's over the limit with ⚠️. Lifting this requires running your own [Telegram Bot API server](https://github.com/tdlib/telegram-bot-api) (raises it to 2 GB) — not set up here, but the bot is structured so you could point it at one later.
 
 ---
 
-## 🚀 Quick start
+## 🚀 Deploy to Railway
 
-You'll need a free [Cloudflare account](https://dash.cloudflare.com/sign-up) and [Node.js 18+](https://nodejs.org).
+You'll need a [Railway account](https://railway.app) and a bot token.
 
 ### 1. Get a bot token
 
 Message [@BotFather](https://t.me/BotFather), send `/newbot`, and copy the token it gives you.
 
-### 2. Install and log in
+### 2. Push this repo to GitHub
+
+Railway deploys from a Git repo. If you haven't already:
 
 ```bash
-git clone https://github.com/mahanshafaei/telegram-downloader-bot.git
-cd telegram-downloader-bot
-npm install
-npx wrangler login
+git init && git add . && git commit -m "Telegram downloader bot"
+git branch -M main
+git remote add origin https://github.com/mahanshafaei/telegram-downloader-bot.git
+git push -u origin main
 ```
 
-### 3. Add your secrets
+### 3. Create the Railway service
 
-```bash
-npx wrangler secret put BOT_TOKEN        # paste the BotFather token
-npx wrangler secret put WEBHOOK_SECRET   # any random string, e.g. a password
-```
+1. On [railway.app](https://railway.app) → **New Project → Deploy from GitHub repo**
+2. Pick your repo. Railway detects the `Dockerfile` and builds it (this installs ffmpeg and yt-dlp for you).
+3. Open the service → **Variables** → add:
 
-`WEBHOOK_SECRET` is optional but recommended — it stops anyone else from POSTing fake updates to your worker. Keep it to letters and numbers (Telegram rejects characters like `*` or `!`).
+   | Variable | Value |
+   |----------|-------|
+   | `BOT_TOKEN` | the token from BotFather |
 
-### 4. Deploy
+4. That's it. Railway builds and starts the bot. Watch **Deploy Logs** — you'll see `Logged in as @yourbot. Polling…`
 
-```bash
-npx wrangler deploy
-```
-
-Copy the URL it prints, e.g. `https://telegram-downloader-bot.YOUR-NAME.workers.dev`.
-
-### 5. Point Telegram at your worker
-
-Register the webhook, filling in your token, URL, and secret:
-
-```bash
-curl "https://api.telegram.org/bot<BOT_TOKEN>/setWebhook?url=<WORKER_URL>&secret_token=<WEBHOOK_SECRET>"
-```
-
-A `{"ok":true}` response means you're live. Send your bot a link and it'll reply with the media.
+The bot uses **long polling**, so there's no webhook, no public URL, and no domain to configure. Send it a link and it replies.
 
 ---
 
@@ -90,67 +79,51 @@ The bot needs **no admin rights** — it just reads links and replies.
 
 ## ⚙️ Configuration
 
-Secrets are set with `wrangler secret put`. Non-secret settings live in `wrangler.toml`.
+All configuration is via environment variables. Only `BOT_TOKEN` is required.
 
-| Name | Kind | Required | Purpose |
-|------|------|----------|---------|
-| `BOT_TOKEN` | secret | yes | Your BotFather token |
-| `WEBHOOK_SECRET` | secret | no | Verifies incoming webhook calls |
-| `COBALT_API_URL` | var | no | Cobalt instance(s) for resolving media |
-| `COBALT_API_KEY` | secret | no | Only if your cobalt instance needs a key |
+| Name | Required | Purpose |
+|------|----------|---------|
+| `BOT_TOKEN` | yes | Your BotFather token |
+| `DOWNLOAD_DIR` | no | Where files are staged before upload (defaults to a temp dir) |
+| `MAX_FILESIZE_MB` | no | Cap on file size in MB. Clamped to 50 (Telegram's limit) |
 
-### Media resolving
-
-Instagram, Pinterest, and YouTube are resolved through [cobalt](https://github.com/imputnet/cobalt), an open-source downloader API. The bot ships with a couple of public instances as a default, but they rate-limit and go down from time to time. For anything beyond casual use, run your own — set `COBALT_API_URL` to one URL, or several comma-separated ones tried in order:
-
-```toml
-COBALT_API_URL = "https://your-cobalt.example.com,https://co.otomir23.me"
-```
-
-> **Note on Instagram:** some posts are served only to logged-in users, and a public instance on a datacenter IP can't fetch those — you'll get a "login required" message. Public reels, photos, and albums work fine.
-
-### Optional: instant re-sends with a file cache
-
-When Telegram sends a file, it hands back a `file_id` that can be re-sent to anyone, instantly and with no size limit. Wire up a [Cloudflare KV](https://developers.cloudflare.com/kv/) namespace and the bot will remember what it has sent, so a repeated link comes back immediately instead of being downloaded again.
-
-```bash
-npx wrangler kv namespace create MEDIA_CACHE
-```
-
-Paste the printed `id` into `wrangler.toml` (uncomment the `[[kv_namespaces]]` block), then redeploy. It's entirely optional — without it the bot works the same, just without the shortcut.
+See [`.env.example`](.env.example) for a template.
 
 ---
 
 ## 🛠️ Local development
 
+You need [Node 18+](https://nodejs.org). yt-dlp and ffmpeg are resolved automatically — if they're not on your `PATH`, the bot downloads a standalone yt-dlp binary to `~/.telegram-downloader/bin` on first run. (ffmpeg is only needed for merging high-res video and MP3 extraction; install it from [ffmpeg.org](https://ffmpeg.org/download.html) if you want those.)
+
 ```bash
-cp .dev.vars.example .dev.vars   # fill in your values
-npm run dev                      # runs the worker locally
+cp .env.example .env    # add your BOT_TOKEN
+npm start               # runs the bot with long polling
 ```
 
-`npm run tail` streams live logs from the deployed worker, which is the fastest way to see what's happening when something misbehaves. Opening the worker's URL in a browser shows a small status page with the running version and current config.
+`npm run check` syntax-checks every module.
 
 ---
 
 ## 🧩 How it works
 
 ```
-Telegram  ──webhook──▶  Cloudflare Worker
-                             │
-                             ├─ detect platform from the link
-                             ├─ resolve a direct media URL (cobalt / tikwm)
-                             └─ send to Telegram, preferring to hand it the URL
-                                so Telegram fetches the bytes itself
+Telegram ──getUpdates (long poll)──▶  Node process (src/bot.js)
+                                          │
+   link ──▶  yt-dlp -J (probe formats) ──▶ quality picker (inline keyboard)
+                                          │
+   tap a quality ──▶  yt-dlp download ──▶ ffmpeg merge/mp3 ──▶ file on disk
+                                          │
+                                          └─▶ upload to Telegram, delete temp file
 ```
 
-Handing Telegram the URL keeps the worker well inside its CPU and memory limits. If a URL send is refused (some CDNs block Telegram's fetcher), the bot falls back to streaming the file through itself, capped at Telegram's 50 MB bot-upload limit.
+The download engine is a port of [yoink](https://github.com/)'s yt-dlp wrapper: it resolves a yt-dlp binary, probes a link with `yt-dlp -J`, builds a list of format choices from the result, and spawns yt-dlp to download the chosen one. Downloads run in per-request temp directories that are removed afterward.
 
 | File | Responsibility |
 |------|----------------|
-| `src/index.js` | Webhook routing, commands, delivery |
-| `src/telegram.js` | Bot API wrapper and media sending |
-| `src/resolvers.js` | Platform detection and media resolving |
-| `src/cache.js` | Optional file_id cache (KV) |
+| `src/bot.js` | Long-poll loop, commands, quality picker, download orchestration |
+| `src/telegram.js` | Bot API wrapper and file uploads |
+| `src/ytdlp.js` | yt-dlp engine — resolve, probe, build choices, download |
+| `src/platforms.js` | Friendly platform names for links |
 | `src/util.js` | Shared helpers |
 
 ---
@@ -159,17 +132,14 @@ Handing Telegram the URL keeps the worker well inside its CPU and memory limits.
 
 | Symptom | Likely cause |
 |---------|--------------|
-| Bot silent, `getWebhookInfo` shows `403` | `WEBHOOK_SECRET` doesn't match the one in `setWebhook` |
-| `500` right after deploy | `BOT_TOKEN` not set, or a moment of propagation — check `npm run tail` |
-| Instagram "login required" | Post is login-walled by Instagram; only public posts can be fetched |
-| A platform stops working | Public cobalt instance is down — set `COBALT_API_URL` to your own |
-| Nothing in groups | Group Privacy still on, or bot needs re-adding |
+| `BOT_TOKEN is not set` on startup | Add the `BOT_TOKEN` variable in Railway → Variables |
+| `File is … over Telegram's 50 MB … limit` | Pick a lower quality; the ⚠️ options are over the limit |
+| YouTube: `content is not available on this app` | YouTube is bot-blocking the host IP — common on datacenter IPs; often resolves on retry or with cookies |
+| `Sign in to confirm you're not a bot` | Same as above — the site wants a logged-in session |
+| A specific site fails | yt-dlp may need updating for that site — the Docker image pulls the latest on each build; redeploy |
+| Nothing in groups | Group Privacy still on, or the bot needs re-adding |
 
-Check `getWebhookInfo` any time to see the last error Telegram recorded:
-
-```bash
-curl "https://api.telegram.org/bot<BOT_TOKEN>/getWebhookInfo"
-```
+Deploy logs (Railway → your service → **Deploy Logs**) show exactly what the bot is doing and any yt-dlp errors.
 
 ---
 

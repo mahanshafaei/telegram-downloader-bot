@@ -1,16 +1,15 @@
 {
   "name": "telegram-downloader-bot",
-  "version": "1.0.0",
-  "description": "A Cloudflare Worker Telegram bot that downloads media from Instagram, TikTok, Pinterest and YouTube.",
+  "version": "2.0.0",
+  "description": "A Telegram bot that downloads video/audio from 1,800+ sites using yt-dlp. Runs on Node, deploys to Railway.",
   "type": "module",
   "private": true,
-  "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
-    "tail": "wrangler tail",
-    "check": "node --check src/index.js && node --check src/telegram.js && node --check src/resolvers.js && node --check src/util.js && node --check src/cache.js"
+  "engines": {
+    "node": ">=18"
   },
-  "devDependencies": {
-    "wrangler": "^3.90.0"
+  "scripts": {
+    "start": "node src/bot.js",
+    "dev": "node src/bot.js",
+    "check": "node --check src/bot.js && node --check src/telegram.js && node --check src/ytdlp.js && node --check src/platforms.js && node --check src/util.js"
   }
 }

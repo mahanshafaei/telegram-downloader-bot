@@ -1,10 +1,15 @@
 node_modules/
-.wrangler/
-.dev.vars
 .env
+.env.local
 *.log
 .DS_Store
 
+# Download staging + resolved yt-dlp binary
+/tmp/
+tgdl/
+
 # Local tooling / editor state — not part of the project
 .claude/
-.tgcloud/
+
+# Reference project I ported the yt-dlp engine from — not part of this bot
+yoink/

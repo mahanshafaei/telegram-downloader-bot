@@ -1,10 +1,8 @@
 // src/util.js
-// Small, dependency-free helpers shared across the worker.
+// Small, dependency-free helpers shared across the bot.
 
 /**
- * Fetch with a timeout so a slow upstream API can never hold a Worker
- * request open long enough to burn our CPU/wall-clock budget.
- *
+ * Fetch with a timeout so a slow Telegram API call can't hang the bot forever.
  * @param {string} url
  * @param {RequestInit & { timeoutMs?: number }} [options]
  * @returns {Promise<Response>}
@@ -21,38 +19,8 @@ export async function fetchWithTimeout(url, options = {}) {
 }
 
 /**
- * Fetch JSON with a timeout and a friendly error if the body is not JSON.
- * @returns {Promise<any>}
- */
-export async function fetchJson(url, options = {}) {
-  const res = await fetchWithTimeout(url, {
-    ...options,
-    headers: {
-      accept: "application/json",
-      "user-agent": DEFAULT_UA,
-      ...(options.headers || {}),
-    },
-  });
-  const text = await res.text();
-  let data;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    throw new Error(
-      `Upstream returned non-JSON (${res.status}): ${text.slice(0, 200)}`
-    );
-  }
-  return { ok: res.ok, status: res.status, data };
-}
-
-// A realistic desktop UA. Some public parsers reject the default worker UA.
-export const DEFAULT_UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
-
-/**
- * Extract the first http(s) URL from an arbitrary block of text.
- * Telegram messages in groups often wrap the link in other words.
+ * Extract the first http(s) URL from an arbitrary block of text. Group
+ * messages often wrap the link in other words.
  * @param {string} text
  * @returns {string|null}
  */
