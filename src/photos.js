@@ -15,6 +15,8 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { commandWorks } from "./ytdlp.js";
+import { fetchInstagramPhotosDirect } from "./instagram.js";
+import { BROWSER_UA } from "./util.js";
 
 /**
  * Resolve gallery-dl. Returns the command name or null when not installed.
@@ -58,40 +60,56 @@ const IMAGE_EXT_RE = /\.(jpe?g|png|webp|gif|heic|avif)(\?|$)/i;
  * makes it print "Waiting for N minutes…" and sleep, repeatedly. A hard
  * timeout kills it so a chat never hangs on "Fetching photos…" forever.
  *
- * Instagram gets a second chance: its default REST API is aggressively
- * blocked for anonymous callers (401/429), while the GraphQL web API the
- * extractor also supports often still works — so an empty/failed first
- * attempt is retried once with `-o api=graphql`. The two attempts share the
- * time budget.
+ * Instagram is special-cased twice. First choice is the direct media API
+ * with login cookies (src/instagram.js) — the exact request yt-dlp makes
+ * successfully, so when video downloads work, photos work too. gallery-dl is
+ * the fallback: default (REST) API, then once more with `-o api=graphql`.
+ * When everything fails, the errors of ALL attempts are reported — the last
+ * attempt's error alone is usually the least informative one.
  *
  * @param {string} galleryDl command from findGalleryDl()
  * @param {string} url       post URL
- * @param {{timeoutMs?: number, cookiesFile?: string}} [opts]  timeoutMs is the
- *   total budget across attempts; cookiesFile is a Netscape cookies.txt
- *   (Instagram in particular usually needs login cookies)
+ * @param {{timeoutMs?: number, cookiesFile?: string, igApiBase?: string}} [opts]
+ *   timeoutMs is the total budget across attempts; cookiesFile is a Netscape
+ *   cookies.txt (Instagram needs login); igApiBase is a test override
  * @returns {Promise<PhotoPost>} urls is empty when the post has no images
  */
 export async function fetchPhotoPost(galleryDl, url, opts = {}) {
   const totalTimeoutMs = opts.timeoutMs ?? 50_000;
   const baseArgs = opts.cookiesFile ? ["--cookies", opts.cookiesFile] : [];
-  const attempts = [[]];
+  let isInstagram = false;
   try {
-    if (new URL(url).hostname.includes("instagram")) {
-      attempts.push(["-o", "api=graphql"]);
-    }
+    isInstagram = new URL(url).hostname.includes("instagram");
   } catch {}
-  const perAttemptMs = Math.floor(totalTimeoutMs / attempts.length);
 
-  let lastError;
-  for (const extraArgs of attempts) {
+  const galleryDlAttempts = isInstagram ? [[], ["-o", "api=graphql"]] : [[]];
+  const perAttemptMs = Math.floor(totalTimeoutMs / galleryDlAttempts.length);
+
+  /** @type {Array<[label: string, run: () => Promise<PhotoPost>]>} */
+  const attempts = [];
+  if (isInstagram && opts.cookiesFile) {
+    attempts.push([
+      "Instagram API",
+      () => fetchInstagramPhotosDirect(url, opts.cookiesFile, { apiBase: opts.igApiBase }),
+    ]);
+  }
+  for (const extraArgs of galleryDlAttempts) {
+    attempts.push([
+      extraArgs.length ? "gallery-dl (graphql)" : "gallery-dl",
+      () => runGalleryDl(galleryDl, url, [...baseArgs, ...extraArgs], perAttemptMs),
+    ]);
+  }
+
+  const errors = [];
+  for (const [label, run] of attempts) {
     try {
-      const post = await runGalleryDl(galleryDl, url, [...baseArgs, ...extraArgs], perAttemptMs);
+      const post = await run();
       if (post.urls.length) return post;
     } catch (err) {
-      lastError = err;
+      errors.push(`${label}: ${err.message}`);
     }
   }
-  if (lastError) throw lastError;
+  if (errors.length) throw new Error(errors.join(" | ").slice(0, 400));
   return { urls: [], title: undefined };
 }
 
@@ -216,10 +234,6 @@ function lastInfoLine(stderr) {
   return line ? line.replace(/^\[[^\]]*\]\[[^\]]*\]\s*/, "") : "";
 }
 
-// Some CDNs refuse requests without a browsery user agent.
-const UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
-
 /**
  * Fallback for when Telegram won't fetch the CDN URLs itself: download the
  * images into `outDir` and convert anything that isn't jpg/png (webp, heic…)
@@ -233,7 +247,7 @@ const UA =
 export async function downloadImages(urls, outDir, ffmpeg = "ffmpeg") {
   const files = [];
   for (const [i, url] of urls.entries()) {
-    const res = await fetch(url, { headers: { "user-agent": UA } });
+    const res = await fetch(url, { headers: { "user-agent": BROWSER_UA } });
     if (!res.ok) throw new Error(`image fetch failed (${res.status})`);
     const ext = extFor(url, res.headers.get("content-type"));
     const file = path.join(outDir, `photo${i}.${ext}`);

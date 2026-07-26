@@ -21,6 +21,11 @@ import { spawnSync } from "node:child_process";
 import { Telegram } from "../src/telegram.js";
 import { fetchPhotoPost, downloadImages } from "../src/photos.js";
 import { prepareCookiesFile } from "../src/cookies.js";
+import {
+  shortcodeFromUrl,
+  shortcodeToPk,
+  fetchInstagramPhotosDirect,
+} from "../src/instagram.js";
 
 const work = await fs.mkdtemp(path.join(os.tmpdir(), "tgdl-photos-"));
 let failures = 0;
@@ -247,6 +252,98 @@ const mediaJson = JSON.parse(mg?.payload.media ?? "[]");
 check("media references attach://", mediaJson.every((m, i) => m.media === `attach://photo${i}`), mg?.payload.media);
 check("caption once in multipart album", mediaJson.filter((m) => m.caption).length === 1 && mediaJson[0].caption === "cap",
   mg?.payload.media);
+
+// ---------------------------------------------------------------------------
+// 1b. Direct Instagram photo API (the yt-dlp-proven request, kept for images)
+// ---------------------------------------------------------------------------
+console.log("▶ Instagram shortcode → pk (ground truth from yt-dlp's _id_to_pk)");
+for (const [sc, pk] of [
+  ["DbRFuNgjM_v", "3949963514013863919"],
+  ["aye83DjauH", "482584233761418119"],
+  ["CxKQpLWhyRq", "3191436484377257066"],
+  ["B_abcDEF123", "2295267634789703095"],
+]) {
+  check(`${sc} → ${pk}`, shortcodeToPk(sc) === pk, `got ${shortcodeToPk(sc)}`);
+}
+check("URL forms parse", ["https://www.instagram.com/p/DbRFuNgjM_v/?utm_source=x",
+  "https://instagram.com/reel/DbRFuNgjM_v", "https://www.instagram.com/tv/DbRFuNgjM_v/",
+  "https://www.instagram.com/someuser/p/DbRFuNgjM_v/"]
+  .every((u) => shortcodeFromUrl(u) === "DbRFuNgjM_v"), "");
+check("non-post URLs rejected", shortcodeFromUrl("https://www.instagram.com/someuser/") === null
+  && shortcodeFromUrl("https://tiktok.com/p/x") === null, "");
+
+console.log("▶ Instagram direct API fetch (stub server)");
+const igJar = path.join(work, "ig-cookies.txt");
+await fs.writeFile(igJar, "# Netscape HTTP Cookie File\n.instagram.com\tTRUE\t/\tTRUE\t1900000000\tsessionid\tSESS123\n#HttpOnly_.instagram.com\tTRUE\t/\tTRUE\t1900000000\tcsrftoken\tCSRF\n.example.com\tTRUE\t/\tTRUE\t1900000000\tother\tnope\n");
+let igReq;
+let igMode = "carousel";
+const igApi = http.createServer((req, res) => {
+  igReq = { url: req.url, cookie: req.headers.cookie, appId: req.headers["x-ig-app-id"] };
+  if (igMode === "redirect") {
+    res.writeHead(302, { location: "https://www.instagram.com/accounts/login/" }).end();
+    return;
+  }
+  res.writeHead(200, { "content-type": "application/json" });
+  res.end(JSON.stringify({ items: [{
+    media_type: 8,
+    caption: { text: "three pics, one clip" },
+    carousel_media: [
+      { media_type: 1, image_versions2: { candidates: [{ url: "https://scontent.cdninstagram.com/a.jpg", width: 1080 }, { url: "https://scontent.cdninstagram.com/a-small.jpg", width: 320 }] } },
+      { media_type: 2, image_versions2: { candidates: [{ url: "https://scontent.cdninstagram.com/video-thumb.jpg" }] }, video_versions: [{ url: "https://x/v.mp4" }] },
+      { media_type: 1, image_versions2: { candidates: [{ url: "https://scontent.cdninstagram.com/b.jpg", width: 1080 }] } },
+    ],
+  }] }));
+});
+await new Promise((r) => igApi.listen(0, "127.0.0.1", r));
+const igBase = `http://127.0.0.1:${igApi.address().port}`;
+
+const igDirect = await fetchInstagramPhotosDirect("https://www.instagram.com/p/DbRFuNgjM_v/", igJar, { apiBase: igBase });
+check("photos extracted, video item skipped",
+  igDirect.urls.length === 2 && igDirect.urls[0].endsWith("/a.jpg") && igDirect.urls[1].endsWith("/b.jpg"),
+  JSON.stringify(igDirect.urls));
+check("caption extracted", igDirect.title === "three pics, one clip", JSON.stringify(igDirect.title));
+check("request hits /media/{pk}/info/", igReq?.url === "/media/3949963514013863919/info/", igReq?.url);
+check("session cookies sent (instagram only)",
+  /sessionid=SESS123/.test(igReq?.cookie) && /csrftoken=CSRF/.test(igReq?.cookie) && !/other=nope/.test(igReq?.cookie),
+  igReq?.cookie);
+check("X-IG-App-ID header sent", igReq?.appId === "936619743392459", igReq?.appId);
+
+igMode = "redirect";
+const igExpired = await fetchInstagramPhotosDirect("https://www.instagram.com/p/DbRFuNgjM_v/", igJar, { apiBase: igBase }).catch((e) => e);
+check("login redirect → clear 'expired' error", igExpired instanceof Error && /expired/.test(igExpired.message),
+  String(igExpired && igExpired.message));
+const igNoSession = await fetchInstagramPhotosDirect("https://www.instagram.com/p/DbRFuNgjM_v/",
+  path.join(work, "a.jpg"), { apiBase: igBase }).catch((e) => e);
+check("jar without sessionid → clear error", igNoSession instanceof Error && /sessionid/.test(igNoSession.message),
+  String(igNoSession && igNoSession.message));
+
+console.log("▶ photo-path orchestration: direct API first, gallery-dl fallback");
+igMode = "redirect"; // direct attempt fails…
+await fs.writeFile(stub, `#!/usr/bin/env node
+if (process.argv.includes("--version")) { console.log("stub"); process.exit(0); }
+process.stdout.write(JSON.stringify([[3, "https://cdn.example/fallback.jpg", { type: "image" }]]));
+`);
+const orch = await fetchPhotoPost(stub, "https://www.instagram.com/p/DbRFuNgjM_v/",
+  { cookiesFile: igJar, igApiBase: igBase });
+check("falls back to gallery-dl when API fails", orch.urls.length === 1 && orch.urls[0].endsWith("fallback.jpg"),
+  JSON.stringify(orch));
+igMode = "carousel"; // direct attempt works → gallery-dl not needed
+const orch2 = await fetchPhotoPost(stub, "https://www.instagram.com/p/DbRFuNgjM_v/",
+  { cookiesFile: igJar, igApiBase: igBase });
+check("direct API wins when it works", orch2.urls.length === 2 && orch2.urls[0].endsWith("/a.jpg"), JSON.stringify(orch2.urls));
+// all attempts fail → aggregated error names every attempt
+igMode = "redirect";
+await fs.writeFile(stub, `#!/usr/bin/env node
+if (process.argv.includes("--version")) { console.log("stub"); process.exit(0); }
+console.error("[instagram][error] x: 401 Unauthorized");
+process.stdout.write("[]");
+`);
+const orchErr = await fetchPhotoPost(stub, "https://www.instagram.com/p/DbRFuNgjM_v/",
+  { cookiesFile: igJar, igApiBase: igBase }).catch((e) => e);
+check("all-fail error aggregates every attempt",
+  orchErr instanceof Error && /Instagram API: .*expired/.test(orchErr.message) && /gallery-dl.*401/.test(orchErr.message),
+  String(orchErr && orchErr.message));
+igApi.close();
 
 // ---------------------------------------------------------------------------
 // 2b. Cookie-file normalization: every common export format must become a

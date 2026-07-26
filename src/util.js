@@ -59,3 +59,7 @@ export function humanSize(bytes) {
 
 // Telegram's hard limit for a bot uploading a file by multipart is 50 MB.
 export const TELEGRAM_UPLOAD_LIMIT = 50 * 1024 * 1024;
+
+// Some CDNs and APIs refuse requests without a browsery user agent.
+export const BROWSER_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
