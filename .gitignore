@@ -13,3 +13,5 @@ tgdl/
 
 # Reference project I ported the yt-dlp engine from — not part of this bot
 yoink/
+out-manual/
+*.local.json
