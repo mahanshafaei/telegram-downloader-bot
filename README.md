@@ -95,9 +95,9 @@ See [`.env.example`](.env.example) for a template.
 
 Instagram blocks most anonymous access (`401 Unauthorized`, `429 Too Many Requests`), for videos and photos alike. The fix is one cookies file, which the bot automatically passes to **both** yt-dlp and gallery-dl:
 
-1. In a browser where you're logged in to Instagram (a throwaway account is fine — Instagram may flag accounts used for scraping), export cookies with a "Get cookies.txt"-style extension (Netscape format).
+1. In a browser where you're logged in to Instagram (a throwaway account is fine — Instagram may flag accounts used for scraping), export cookies with any cookie-export extension. **Any format works** — strict Netscape cookies.txt, a JSON export (Cookie-Editor style), or even a raw copied `Cookie:` header string; the bot converts whatever it finds at startup (tabs-to-spaces paste damage and Windows line endings included).
 2. Put the file at `/etc/tgdl-bot/cookies.txt` on the server (or set `COOKIES_FILE` to wherever you keep it).
-3. Restart the bot. The startup log shows `cookies: /etc/tgdl-bot/cookies.txt (passed to yt-dlp and gallery-dl)` when it's picked up.
+3. Restart the bot. The startup log shows what was detected, e.g. `cookies: /etc/tgdl-bot/cookies.txt → JSON export converted (12 cookies); passed to yt-dlp and gallery-dl`.
 
 Keep the file out of git — a committed session cookie in a public repo will be harvested and the session killed within hours. TikTok works without any of this.
 

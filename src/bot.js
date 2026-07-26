@@ -25,6 +25,7 @@ import {
   MAX_FILESIZE_ERROR,
 } from "./ytdlp.js";
 import { findFfprobe, ensureIosPlayable } from "./media.js";
+import { prepareCookiesFile } from "./cookies.js";
 import {
   findGalleryDl,
   fetchPhotoPost,
@@ -143,12 +144,25 @@ async function main() {
       "gallery-dl not found — photo posts disabled. Install it with: pip3 install --break-system-packages gallery-dl"
     );
   }
-  cookiesFile = await findCookiesFile();
-  console.log(
-    cookiesFile
-      ? `cookies: ${cookiesFile} (passed to yt-dlp and gallery-dl)`
-      : `cookies: none (Instagram may block anonymous access — put a cookies.txt at ${DEFAULT_COOKIES_PATHS[0]})`
-  );
+  const rawCookies = await findCookiesFile();
+  if (rawCookies) {
+    // Whatever format the user's export is in (strict Netscape, JSON,
+    // space-mangled paste, raw Cookie header), normalize it into a jar
+    // yt-dlp and gallery-dl will accept.
+    try {
+      const prepared = await prepareCookiesFile(rawCookies, DOWNLOAD_DIR);
+      cookiesFile = prepared.path;
+      console.log(
+        `cookies: ${rawCookies} → ${prepared.note}; passed to yt-dlp and gallery-dl`
+      );
+    } catch (err) {
+      console.warn(`cookies: ${rawCookies} could not be used — ${err.message}`);
+    }
+  } else {
+    console.log(
+      `cookies: none (Instagram may block anonymous access — put a cookies.txt at ${DEFAULT_COOKIES_PATHS[0]})`
+    );
+  }
 
   const me = await tg.call("getMe", {}).catch(() => null);
   if (me) console.log(`Logged in as @${me.username}. Polling…`);

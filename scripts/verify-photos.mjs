@@ -20,6 +20,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { Telegram } from "../src/telegram.js";
 import { fetchPhotoPost, downloadImages } from "../src/photos.js";
+import { prepareCookiesFile } from "../src/cookies.js";
 
 const work = await fs.mkdtemp(path.join(os.tmpdir(), "tgdl-photos-"));
 let failures = 0;
@@ -246,6 +247,77 @@ const mediaJson = JSON.parse(mg?.payload.media ?? "[]");
 check("media references attach://", mediaJson.every((m, i) => m.media === `attach://photo${i}`), mg?.payload.media);
 check("caption once in multipart album", mediaJson.filter((m) => m.caption).length === 1 && mediaJson[0].caption === "cap",
   mg?.payload.media);
+
+// ---------------------------------------------------------------------------
+// 2b. Cookie-file normalization: every common export format must become a
+//     jar that REAL yt-dlp accepts (validated by loading it with yt-dlp).
+// ---------------------------------------------------------------------------
+console.log("▶ cookies normalization (all export formats)");
+const cookieDir = path.join(work, "cookies");
+await fs.mkdir(cookieDir, { recursive: true });
+const haveYtdlp = spawnSync("yt-dlp", ["--version"], { stdio: "ignore" }).status === 0;
+
+async function cookieCase(name, content, expectCookieRe) {
+  const src = path.join(cookieDir, `${name}.src`);
+  await fs.writeFile(src, content);
+  let prepared;
+  try {
+    prepared = await prepareCookiesFile(src, cookieDir);
+  } catch (e) {
+    check(`${name}: converts`, false, e.message);
+    return;
+  }
+  const jar = await fs.readFile(prepared.path, "utf8");
+  check(`${name}: converts (${prepared.note})`,
+    jar.startsWith("# Netscape HTTP Cookie File") && expectCookieRe.test(jar),
+    JSON.stringify(jar.slice(0, 120)));
+  check(`${name}: fields are tab-separated`,
+    jar.split("\n").filter((l) => l && !l.startsWith("# ")).every((l) => l.split("\t").length === 7),
+    jar);
+  if (haveYtdlp) {
+    // The real consumer decides: yt-dlp must load the jar without the
+    // "does not look like a Netscape format cookies file" error.
+    const res = spawnSync("yt-dlp", ["--cookies", prepared.path, "--simulate", "--no-warnings",
+      "--print", "id", "dummy:blank"], { encoding: "utf8" });
+    const rejected = /does not look like a Netscape/i.test(res.stderr ?? "");
+    check(`${name}: real yt-dlp accepts the jar`, !rejected, res.stderr?.slice(0, 150));
+  }
+  // Re-running must not modify the original file.
+  const original = await fs.readFile(src, "utf8");
+  check(`${name}: source file untouched`, original === content, "");
+}
+
+// Strict Netscape (control) — plus an #HttpOnly_ line, which is valid.
+await cookieCase("netscape-strict",
+  "# Netscape HTTP Cookie File\n.instagram.com\tTRUE\t/\tTRUE\t1900000000\tsessionid\tabc123\n#HttpOnly_.instagram.com\tTRUE\t/\tTRUE\t1900000000\tcsrftoken\txyz\n",
+  /sessionid\tabc123/);
+// Tabs lost to spaces + CRLF + BOM — what pasting through a terminal does.
+await cookieCase("space-mangled-crlf",
+  "﻿# Netscape HTTP Cookie File\r\n.instagram.com TRUE / TRUE 1900000000 sessionid abc123\r\n.instagram.com TRUE / TRUE 1900000000 ds_user_id 42\r\n",
+  /sessionid\tabc123/);
+// Cookie-Editor style JSON array export.
+await cookieCase("json-array",
+  JSON.stringify([
+    { domain: ".instagram.com", hostOnly: false, path: "/", secure: true, httpOnly: true, expirationDate: 1900000000.5, name: "sessionid", value: "abc123" },
+    { domain: ".instagram.com", path: "/", secure: true, name: "ds_user_id", value: "42" },
+  ]),
+  /sessionid\tabc123/);
+// JSON wrapped in {cookies:[...]} and session cookies without expiry.
+await cookieCase("json-wrapped",
+  JSON.stringify({ url: "https://instagram.com", cookies: [{ domain: "www.instagram.com", name: "sessionid", value: "abc123" }] }),
+  /sessionid\tabc123/);
+// A raw copied Cookie request header.
+await cookieCase("header-string",
+  "mid=Zxyz; ds_user_id=42; sessionid=abc%3A123; csrftoken=tok",
+  /sessionid\tabc%3A123/);
+// Garbage must fail with a clear error, not silently produce an empty jar.
+{
+  const src = path.join(cookieDir, "garbage.src");
+  await fs.writeFile(src, "this is not cookies at all\njust some text\n");
+  const err = await prepareCookiesFile(src, cookieDir).catch((e) => e);
+  check("garbage: rejected with clear error", err instanceof Error && /no cookies could be parsed/.test(err.message),
+    String(err && (err.message ?? "resolved")));
+}
 
 // ---------------------------------------------------------------------------
 // 3. downloadImages fallback: fetch from a local CDN stub, convert webp→jpg.
