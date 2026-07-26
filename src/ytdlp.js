@@ -31,7 +31,7 @@ function ytDlpAssetName() {
 
 // Spawn a command just to see whether it runs. Async on purpose so we never
 // block while probing for a binary.
-function commandWorks(cmd, args) {
+export function commandWorks(cmd, args) {
   return new Promise((resolve) => {
     let child;
     try {
@@ -171,65 +171,57 @@ export async function probe(ytdlp, url) {
 
 const MAX_VIDEO_CHOICES = 8;
 
-// iPhones only play an mp4 when the moov atom is at the front of the file
-// ("-movflags +faststart") and the codecs are H.264 video + AAC audio; without
-// faststart iOS shows a stuck or square video while Android plays it fine.
+// iPhones only play H.264 (yuv420p) + AAC in an mp4 with the moov atom at the
+// front; Android and Telegram Desktop play nearly anything, which is why bad
+// picks "work everywhere except iPhone".
 //
-// The catch: Instagram/TikTok serve a single, already-.mp4 file with the moov
-// at the END. yt-dlp's --remux-video only runs ffmpeg when the *container*
-// needs changing, so for an already-mp4 file it does nothing and faststart is
-// never applied. FFmpegCopyStream always runs a stream-copy ffmpeg pass (no
-// re-encode — fast, keeps H.264), which is where we inject +faststart. This
-// reliably fixes the moov position on every download, merged or single-file.
-const FASTSTART_PP_ARGS = [
-  "--use-postprocessor",
-  "FFmpegCopyStream",
-  "--postprocessor-args",
-  "CopyStream:-movflags +faststart",
-  // Also cover the merge case (separate video+audio) directly.
-  "--postprocessor-args",
-  "Merger:-movflags +faststart",
-];
-
-// iOS-compatible format preference: H.264 video (avc1) + AAC audio (mp4a).
-// Both Instagram and TikTok already serve H.264, so this almost always selects
-// a stream that needs no re-encoding — just a fast remux to mp4.
-function iosVideoSelector(maxHeight) {
-  const cap = maxHeight ? `[height<=${maxHeight}]` : "";
-  return (
-    // 1) H.264 + AAC within the cap — ideal, no re-encode.
-    `bv*${cap}[vcodec^=avc1]+ba[acodec^=mp4a]/` +
-    // 2) any codec within the cap, or a muxed file within the cap.
-    `bv*${cap}+ba/b${cap}/` +
-    // 3) absolute fallback: best available.
-    `bv*+ba/b`
-  );
+// Two traps make filter-based selection ("[height<=720][vcodec^=avc1]") fail
+// on exactly the sites we care about:
+//   • Codec labels differ per extractor. TikTok reports vcodec "h264"/"h265"
+//     (never "avc1"), Instagram often reports no codec or acodec at all — so
+//     an avc1/mp4a filter silently never matches and yt-dlp falls back to its
+//     default ranking, which prefers AV1 > VP9 > H.265 > H.264. That's how
+//     TikTok links became 1080p HEVC files.
+//   • Instagram/TikTok videos are portrait: "height" is the LONG side
+//     (1024/1280/1920), so [height<=720] matches nothing at all.
+//
+// Sorting (-S) avoids both traps: "res:N" prefers the largest video whose
+// *smaller* dimension is ≤N (portrait-safe, and never empty — it just ranks),
+// and "vcodec:h264,acodec:aac" ranks H.264/AAC first while matching every
+// label spelling (avc1, h264, mp4a, aac…). If a site truly offers no H.264,
+// the post-download pass in media.js re-encodes — so what we upload is
+// guaranteed playable either way.
+function iosSortArgs(maxRes) {
+  const res = maxRes ? `res:${maxRes},` : "";
+  return ["-S", `${res}vcodec:h264,acodec:aac`];
 }
 
 /**
  * Fast, iOS-safe download choice for the auto-best platforms (Instagram,
  * TikTok). Caps resolution to keep the file small enough to upload before
- * Telegram times out ("operation aborted"), prefers an H.264/AAC stream, and
- * outputs an mp4 with faststart (see FASTSTART_PP_ARGS). No re-encode, so it
- * stays quick on limited CPU.
+ * Telegram times out ("operation aborted") and prefers an H.264/AAC stream so
+ * no re-encoding is needed.
  *
- * @param {number} [maxHeight] resolution ceiling (default 720)
+ * @param {number} [maxRes] resolution ceiling on the smaller dimension (default 720)
  * @returns {DownloadChoice}
  */
-export function buildFastChoice(maxHeight = 720) {
+export function buildFastChoice(maxRes = 720) {
   return {
     kind: "video",
-    label: `up to ${maxHeight}p · mp4`,
+    label: `up to ${maxRes}p · mp4`,
+    // media.js also honors this cap if it has to re-encode the file.
+    maxRes,
     args: [
       "-f",
-      iosVideoSelector(maxHeight),
+      "bv*+ba/b",
+      ...iosSortArgs(maxRes),
       "--merge-output-format",
       "mp4",
-      // Ensure a non-mp4 container (e.g. webm) becomes mp4; FFmpegCopyStream
-      // below then applies faststart even when the source was already mp4.
+      // Repackage non-mp4 containers (e.g. webm). Any ffmpeg pass yt-dlp runs
+      // (merge or remux) already writes +faststart; single-file mp4s that
+      // skip ffmpeg are fixed after download by media.js.
       "--remux-video",
       "mp4",
-      ...FASTSTART_PP_ARGS,
     ],
   };
 }
@@ -274,15 +266,14 @@ export function buildChoices(info) {
       size: size || undefined,
       args: [
         "-f",
-        // Prefer H.264+AAC at this height (iOS-friendly), then any codec at
-        // this height, then a lower one.
-        `bv*[height=${height}][vcodec^=avc1]+ba[acodec^=mp4a]/` +
-          `bv*[height=${height}]+ba/b[height=${height}]/bv*[height<=${height}]+ba/b`,
+        // This exact height, falling back to a lower one; -S below prefers
+        // H.264/AAC among the matches (iOS-friendly).
+        `bv*[height=${height}]+ba/b[height=${height}]/bv*[height<=${height}]+ba/b`,
+        ...iosSortArgs(),
         "--merge-output-format",
         "mp4",
         "--remux-video",
         "mp4",
-        ...FASTSTART_PP_ARGS,
       ],
     });
   }
@@ -293,12 +284,12 @@ export function buildChoices(info) {
       label: "best available · mp4",
       args: [
         "-f",
-        iosVideoSelector(),
+        "bv*+ba/b",
+        ...iosSortArgs(),
         "--merge-output-format",
         "mp4",
         "--remux-video",
         "mp4",
-        ...FASTSTART_PP_ARGS,
       ],
     });
   }

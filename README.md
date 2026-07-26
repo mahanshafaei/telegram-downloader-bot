@@ -23,6 +23,7 @@ Powered by [yt-dlp](https://github.com/yt-dlp/yt-dlp), so it handles YouTube, X/
 - 🎚️ **Quality picker** — every link comes back with a list of resolutions (each showing its estimated size) plus an audio-only MP3 option
 - 🎵 **Audio extraction** — grab just the sound as an MP3, ffmpeg does the conversion
 - 💬 Works in **private chats and groups**
+- 📱 **Plays on every device, iPhones included** — every video is delivered as H.264 + AAC in a faststart MP4. The bot prefers an H.264 stream at download time and verifies the actual file afterwards (`src/media.js`), re-packaging or re-encoding anything else (HEVC, VP9, AV1, Opus…) that iOS can't play. Run `npm run verify:ios` to test the whole pipeline locally.
 - 🔔 **Live progress** — the bot edits its message as the download runs
 - 🪶 **Zero runtime npm dependencies** — just Node, yt-dlp, and ffmpeg
 

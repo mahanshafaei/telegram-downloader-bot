@@ -23,6 +23,7 @@ import {
   buildFastChoice,
   download,
 } from "./ytdlp.js";
+import { findFfprobe, ensureIosPlayable } from "./media.js";
 import { extractUrl, escapeHtml, humanSize } from "./util.js";
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -43,6 +44,7 @@ const tg = new Telegram(BOT_TOKEN);
 // Resolved once at startup and reused for every download.
 let ytdlp;
 let ffmpegLocation;
+let ffprobeLocation;
 
 // Pending download choices, keyed by a short token embedded in callback_data.
 // Telegram limits callback_data to 64 bytes, so we can't stuff a URL in there.
@@ -83,9 +85,15 @@ async function main() {
   console.log("Resolving yt-dlp…");
   ytdlp = await ensureYtDlp((m) => console.log(m));
   ffmpegLocation = await findFfmpeg();
+  ffprobeLocation = await findFfprobe(ffmpegLocation);
   console.log(
-    `yt-dlp ready (${ytdlp}); ffmpeg: ${ffmpegLocation || "on PATH / bundled"}`
+    `yt-dlp ready (${ytdlp}); ffmpeg: ${ffmpegLocation || "on PATH / bundled"}; ffprobe: ${ffprobeLocation || "NOT FOUND"}`
   );
+  if (!ffprobeLocation) {
+    console.warn(
+      "ffprobe not found — videos will be sent without the iOS compatibility check. Install ffmpeg/ffprobe for guaranteed iPhone playback."
+    );
+  }
 
   const me = await tg.call("getMe", {}).catch(() => null);
   if (me) console.log(`Logged in as @${me.username}. Polling…`);
@@ -310,6 +318,33 @@ async function runDownload(chatId, messageId, job) {
       }
     );
 
+    // Guarantee iPhone playback: verify the real file and remux/re-encode it
+    // if it isn't H.264/AAC faststart mp4 (see media.js). Also yields real
+    // width/height/duration so iOS renders the right aspect ratio.
+    let sendPath = filePath;
+    let videoMeta = {};
+    if (choice.kind !== "audio") {
+      const fixed = await ensureIosPlayable(filePath, {
+        ffmpegLocation,
+        ffprobe: ffprobeLocation,
+        maxRes: choice.maxRes,
+        onTranscode: () => {
+          if (!messageId) return;
+          tg.editMessageText(
+            chatId,
+            messageId,
+            "⚙️ Converting for iPhone playback…"
+          ).catch(() => {});
+        },
+      });
+      sendPath = fixed.path;
+      videoMeta = {
+        width: fixed.width,
+        height: fixed.height,
+        duration: fixed.duration,
+      };
+    }
+
     if (messageId) {
       await tg
         .editMessageText(chatId, messageId, "📤 Uploading to Telegram…")
@@ -318,7 +353,7 @@ async function runDownload(chatId, messageId, job) {
 
     const method = choice.kind === "audio" ? "sendAudio" : "sendVideo";
     const caption = title ? `🎞️ ${escapeHtml(title).slice(0, 900)}` : undefined;
-    await tg.sendFile(method, chatId, filePath, { caption });
+    await tg.sendFile(method, chatId, sendPath, { caption, extra: videoMeta });
 
     if (messageId) await tg.deleteMessage(chatId, messageId).catch(() => {});
   } catch (err) {

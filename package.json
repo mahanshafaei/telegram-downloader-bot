@@ -10,6 +10,7 @@
   "scripts": {
     "start": "node src/bot.js",
     "dev": "node src/bot.js",
-    "check": "node --check src/bot.js && node --check src/telegram.js && node --check src/ytdlp.js && node --check src/platforms.js && node --check src/util.js"
+    "check": "node --check src/bot.js && node --check src/telegram.js && node --check src/ytdlp.js && node --check src/platforms.js && node --check src/util.js && node --check src/media.js",
+    "verify:ios": "node scripts/verify-ios-compat.mjs"
   }
 }
