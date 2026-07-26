@@ -79,6 +79,65 @@ process.exit(1);
 const err = await fetchPhotoPost(stub, "https://x").catch((e) => e);
 check("extractor error surfaced", err instanceof Error && /Login required/.test(err.message), String(err && err.message));
 
+// gallery-dl exits 0 even when the extractor fails (it logs "[…][error] …"
+// and dumps "[]") — the error must surface anyway, not become a silent
+// "no photos" that turns into a useless generic chat message.
+console.log("▶ exit-0 extractor failure still surfaces its error");
+await fs.writeFile(stub, `#!/usr/bin/env node
+if (process.argv.includes("--version")) { console.log("stub"); process.exit(0); }
+console.error("[tiktok][error] https://x: Requested post not available");
+process.stdout.write("[]");
+process.exit(0);
+`);
+const swallowed = await fetchPhotoPost(stub, "https://www.tiktok.com/@x/photo/1").catch((e) => e);
+check("error line beats exit code 0", swallowed instanceof Error && /Requested post not available/.test(swallowed.message),
+  String(swallowed && (swallowed.message ?? "resolved without error")));
+
+// Third failure shape: clean exit, clean stderr, but a [-1, {error,message}]
+// entry inside the JSON dump (seen live from Instagram's GraphQL API).
+await fs.writeFile(stub, `#!/usr/bin/env node
+if (process.argv.includes("--version")) { console.log("stub"); process.exit(0); }
+process.stdout.write(JSON.stringify([[-1, { error: "HttpError", message: "'401 Unauthorized' for 'https://www.instagram.com/graphql/…'" }]]));
+`);
+const dumpErr = await fetchPhotoPost(stub, "https://www.tiktok.com/@x/photo/1").catch((e) => e);
+check("[-1] dump entry surfaces as error", dumpErr instanceof Error && /HttpError: '401 Unauthorized'/.test(dumpErr.message),
+  String(dumpErr && (dumpErr.message ?? "resolved without error")));
+
+// …but a genuinely empty, error-free result stays a clean empty (caller then
+// says "no photos" legitimately).
+await fs.writeFile(stub, `#!/usr/bin/env node
+if (process.argv.includes("--version")) { console.log("stub"); process.exit(0); }
+process.stdout.write("[]");
+`);
+const empty = await fetchPhotoPost(stub, "https://example.com/x");
+check("clean empty result is not an error", Array.isArray(empty.urls) && empty.urls.length === 0, JSON.stringify(empty));
+
+// Instagram gets a second attempt with the GraphQL API when the default REST
+// API comes back blocked/empty. The stub fails WITHOUT -o api=graphql and
+// succeeds WITH it — proving the retry wiring.
+console.log("▶ Instagram GraphQL retry");
+await fs.writeFile(stub, `#!/usr/bin/env node
+if (process.argv.includes("--version")) { console.log("stub"); process.exit(0); }
+const graphql = process.argv.includes("api=graphql");
+if (!graphql) {
+  console.error("[instagram][error] https://x: 401 Unauthorized");
+  process.stdout.write("[]");
+  process.exit(0);
+}
+process.stdout.write(JSON.stringify([
+  [2, { category: "instagram", description: "sunset pics" }],
+  [3, "https://scontent.cdninstagram.com/v/1.jpg?x=1", { extension: "jpg" }],
+  [3, "https://scontent.cdninstagram.com/v/2.jpg?x=1", { extension: "jpg" }],
+]));
+`);
+const igPost = await fetchPhotoPost(stub, "https://www.instagram.com/p/ABC123/");
+check("REST failure retried via GraphQL", igPost.urls.length === 2, JSON.stringify(igPost.urls));
+check("caption from GraphQL attempt", igPost.title === "sunset pics", JSON.stringify(igPost.title));
+// Non-Instagram links must NOT get the GraphQL retry (single attempt).
+const nonIg = await fetchPhotoPost(stub, "https://www.tiktok.com/@x/photo/1").catch((e) => e);
+check("no GraphQL retry for non-Instagram", nonIg instanceof Error && /401 Unauthorized/.test(nonIg.message),
+  String(nonIg && (nonIg.message ?? JSON.stringify(nonIg))));
+
 // A stalled gallery-dl (e.g. Instagram 429 wait loops) must be killed by the
 // timeout, surfacing its last log line — never hang the chat forever.
 console.log("▶ gallery-dl stall → hard timeout");

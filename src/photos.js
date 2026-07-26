@@ -55,20 +55,48 @@ const IMAGE_EXT_RE = /\.(jpe?g|png|webp|gif|heic|avif)(\?|$)/i;
  * "audio" — that (and covers/subtitles) must be filtered out.
  *
  * gallery-dl can stall for a very long time — e.g. Instagram rate limiting
- * makes it print "Waiting for N minutes…" and sleep, repeatedly. The hard
- * timeout below kills it so a chat never hangs on "Fetching photos…" forever.
+ * makes it print "Waiting for N minutes…" and sleep, repeatedly. A hard
+ * timeout kills it so a chat never hangs on "Fetching photos…" forever.
+ *
+ * Instagram gets a second chance: its default REST API is aggressively
+ * blocked for anonymous callers (401/429), while the GraphQL web API the
+ * extractor also supports often still works — so an empty/failed first
+ * attempt is retried once with `-o api=graphql`. The two attempts share the
+ * time budget.
  *
  * @param {string} galleryDl command from findGalleryDl()
  * @param {string} url       post URL
- * @param {{timeoutMs?: number}} [opts]
+ * @param {{timeoutMs?: number}} [opts]  total budget across attempts
  * @returns {Promise<PhotoPost>} urls is empty when the post has no images
  */
 export async function fetchPhotoPost(galleryDl, url, opts = {}) {
-  const timeoutMs = opts.timeoutMs ?? 45_000;
+  const totalTimeoutMs = opts.timeoutMs ?? 50_000;
+  const attempts = [[]];
+  try {
+    if (new URL(url).hostname.includes("instagram")) {
+      attempts.push(["-o", "api=graphql"]);
+    }
+  } catch {}
+  const perAttemptMs = Math.floor(totalTimeoutMs / attempts.length);
+
+  let lastError;
+  for (const extraArgs of attempts) {
+    try {
+      const post = await runGalleryDl(galleryDl, url, extraArgs, perAttemptMs);
+      if (post.urls.length) return post;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  if (lastError) throw lastError;
+  return { urls: [], title: undefined };
+}
+
+async function runGalleryDl(galleryDl, url, extraArgs, timeoutMs) {
   const { code, stdout, stderr, timedOut } = await new Promise(
     (resolve, reject) => {
       // -R 1: one retry is enough; failures should surface, not loop.
-      const child = spawn(galleryDl, ["-R", "1", "-j", "--", url]);
+      const child = spawn(galleryDl, ["-R", "1", ...extraArgs, "-j", "--", url]);
       let out = "";
       let err = "";
       let killed = false;
@@ -108,8 +136,20 @@ export async function fetchPhotoPost(galleryDl, url, opts = {}) {
 
   const urls = [];
   let title;
+  let dumpError;
   for (const entry of entries) {
     if (!Array.isArray(entry)) continue;
+    // [-1, {error, message}] — gallery-dl can report failures inside the
+    // dump itself, with a clean exit code and empty stderr.
+    if (entry[0] === -1 && entry[1] && typeof entry[1] === "object") {
+      dumpError ||= [entry[1].error, entry[1].message]
+        .filter((v) => typeof v === "string" && v)
+        .join(": ")
+        // These messages embed full request URLs — noise in a chat message.
+        .replace(/ for '[^']{40,}'/g, "")
+        .slice(0, 200);
+      continue;
+    }
     // [2, {directory metadata}] — grab the post description for the caption.
     if (entry[0] === 2 && entry[1] && typeof entry[1] === "object") {
       title ||= firstNonEmpty(entry[1], ["title", "desc", "description", "content"]);
@@ -130,8 +170,15 @@ export async function fetchPhotoPost(galleryDl, url, opts = {}) {
     title ||= firstNonEmpty(meta, ["title", "desc", "description", "content"]);
   }
 
-  if (urls.length === 0 && code !== 0) {
-    throw new Error(cleanGalleryDlError(stderr) || `gallery-dl exit ${code}`);
+  if (urls.length === 0) {
+    // gallery-dl exits 0 even when the extractor errored — the reason lands
+    // in a stderr "[…][error]" line or in a [-1, {...}] dump entry. Go by
+    // those, not just the exit code, or real failures turn into a useless
+    // generic "no photos" message.
+    const reason = cleanGalleryDlError(stderr) || dumpError;
+    if (reason || code !== 0) {
+      throw new Error(reason || `gallery-dl exit ${code}`);
+    }
   }
   return { urls, title };
 }
