@@ -222,6 +222,10 @@ export function buildFastChoice(maxRes = 720) {
       // skip ffmpeg are fixed after download by media.js.
       "--remux-video",
       "mp4",
+      // Fragmented sources (Instagram DASH, HLS) download much faster in
+      // parallel; plain https files are unaffected by this flag.
+      "--concurrent-fragments",
+      "4",
     ],
   };
 }
@@ -315,6 +319,17 @@ function scoreVideo(f) {
 const PROGRESS_PREFIX = "TGDL|";
 const PROGRESS_TEMPLATE = `${PROGRESS_PREFIX}%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s`;
 
+// Printed once after the file lands. Carries the metadata the bot needs for
+// captions and sendVideo attributes, so the auto-best path can skip the
+// separate `yt-dlp -J` probe — that probe re-fetches the whole page and was
+// most of the bot's latency. Title goes last: it may contain "|".
+const META_PREFIX = "TGDLMETA|";
+const META_TEMPLATE = `${META_PREFIX}%(duration)s|%(width)s|%(height)s|%(title)s`;
+
+// Marker error message for a --max-filesize abort, so callers can fall back
+// to a lower resolution instead of showing a raw yt-dlp error.
+export const MAX_FILESIZE_ERROR = "MAX_FILESIZE_EXCEEDED";
+
 /**
  * @typedef {Object} DownloadProgress
  * @property {number} downloadedBytes
@@ -324,9 +339,20 @@ const PROGRESS_TEMPLATE = `${PROGRESS_PREFIX}%(progress.downloaded_bytes)s|%(pro
  */
 
 /**
- * Download one chosen format to `outDir` and resolve with the final file path.
- * Adapted from yoink's download(): same yt-dlp invocation and progress parsing,
- * with the Ink handlers reduced to a couple of optional callbacks.
+ * @typedef {Object} DownloadResult
+ * @property {string} filePath  absolute path to the downloaded file
+ * @property {string} [title]
+ * @property {number} [duration] seconds
+ * @property {number} [width]
+ * @property {number} [height]
+ */
+
+/**
+ * Download one chosen format to `outDir` and resolve with the file path plus
+ * the metadata yt-dlp printed (title/duration/width/height), so callers don't
+ * need a separate probe. Adapted from yoink's download(): same yt-dlp
+ * invocation and progress parsing, with the Ink handlers reduced to a couple
+ * of optional callbacks.
  *
  * @param {Object} opts
  * @param {string} opts.ytdlp
@@ -339,7 +365,7 @@ const PROGRESS_TEMPLATE = `${PROGRESS_PREFIX}%(progress.downloaded_bytes)s|%(pro
  * @param {Object} [handlers]
  * @param {(p: DownloadProgress) => void} [handlers.onProgress]
  * @param {() => void} [handlers.onProcessing]
- * @returns {Promise<string>} absolute path to the downloaded file
+ * @returns {Promise<DownloadResult>}
  */
 export function download(opts, handlers = {}) {
   const onProgress = handlers.onProgress ?? (() => {});
@@ -361,6 +387,8 @@ export function download(opts, handlers = {}) {
     `download:${PROGRESS_TEMPLATE}`,
     "--print",
     "after_move:filepath",
+    "--print",
+    `after_move:${META_TEMPLATE}`,
     "--no-simulate",
     "-o",
     path.join(opts.outDir, "%(title).60s.%(ext)s"),
@@ -378,6 +406,8 @@ export function download(opts, handlers = {}) {
     let stderr = "";
     let filepath = "";
     let buffer = "";
+    let meta = {};
+    let sawMaxFilesizeSkip = false;
     const destinations = [];
 
     child.stdout.on("data", (chunk) => {
@@ -387,7 +417,19 @@ export function download(opts, handlers = {}) {
       for (const rawLine of lines) {
         const line = rawLine.trim();
         if (!line) continue;
-        if (line.startsWith(PROGRESS_PREFIX)) {
+        if (line.startsWith(META_PREFIX)) {
+          const parts = line.slice(META_PREFIX.length).split("|");
+          meta = {
+            duration: toNumber(parts[0]),
+            width: toNumber(parts[1]),
+            height: toNumber(parts[2]),
+            title: parts.slice(3).join("|") || undefined,
+          };
+        } else if (/max-filesize/i.test(line)) {
+          // "[download] File is larger than max-filesize (...)" — yt-dlp
+          // skips the download but still exits 0.
+          sawMaxFilesizeSkip = true;
+        } else if (line.startsWith(PROGRESS_PREFIX)) {
           const [downloaded, total, totalEstimate, speed, eta] = line
             .slice(PROGRESS_PREFIX.length)
             .split("|");
@@ -420,7 +462,9 @@ export function download(opts, handlers = {}) {
     child.on("error", reject);
     child.on("close", (code) => {
       if (code === 0 && filepath) {
-        resolve(filepath);
+        resolve({ filePath: filepath, ...meta });
+      } else if (sawMaxFilesizeSkip || /max-filesize/i.test(stderr)) {
+        reject(new Error(MAX_FILESIZE_ERROR));
       } else {
         reject(
           new Error(

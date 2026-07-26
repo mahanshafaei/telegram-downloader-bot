@@ -154,7 +154,7 @@ async function runCase(name, info, { expectAction, expectMaxRes } = {}) {
 
   // The exact auto-best pipeline from bot.js.
   const choice = buildFastChoice(720);
-  const filePath = await download({
+  const { filePath } = await download({
     ytdlp: "yt-dlp",
     url: info.webpage_url,
     infoJsonPath,
@@ -194,6 +194,26 @@ try {
   await runCase("VP9/Opus webm only", INFOS.webmOnly, { expectAction: "transcoded" });
   await runCase("H.264 video + MP3 audio", INFOS.mp3Audio, { expectAction: "transcoded" });
 
+  // Oversized file → download() must reject with the MAX_FILESIZE marker so
+  // bot.js can retry at a lower resolution instead of showing a raw error.
+  console.log("\n▶ --max-filesize abort surfaces as MAX_FILESIZE marker");
+  {
+    const infoJsonPath = path.join(work, "big.json");
+    await fs.writeFile(infoJsonPath, JSON.stringify(INFOS.instagramMoovEnd));
+    const outDir = path.join(work, "out-big");
+    await fs.mkdir(outDir, { recursive: true });
+    const err = await download({
+      ytdlp: "yt-dlp",
+      url: INFOS.instagramMoovEnd.webpage_url,
+      infoJsonPath,
+      choice: buildFastChoice(720),
+      outDir,
+      maxFilesizeMb: 0.01,
+    }).catch((e) => e);
+    check("rejects with MAX_FILESIZE marker", err instanceof Error && err.message === "MAX_FILESIZE_EXCEEDED",
+      String(err && err.message));
+  }
+
   const liveIdx = process.argv.indexOf("--live");
   if (liveIdx !== -1) {
     const url = process.argv[liveIdx + 1];
@@ -201,10 +221,13 @@ try {
     console.log(`\n▶ LIVE: ${url}`);
     const outDir = path.join(work, "out-live");
     await fs.mkdir(outDir, { recursive: true });
-    const filePath = await download(
+    const dl = await download(
       { ytdlp: "yt-dlp", url, choice: buildFastChoice(720), outDir },
       { onProgress: () => {} }
     );
+    const filePath = dl.filePath;
+    check("metadata came with the download (no probe needed)",
+      Boolean(dl.title) && dl.duration > 0, JSON.stringify({ title: dl.title, duration: dl.duration }));
     const fixed = await ensureIosPlayable(filePath, { ffprobe });
     const out = await probeMedia(ffprobe, fixed.path);
     const moovFirst = await moovBeforeMdat(fixed.path);

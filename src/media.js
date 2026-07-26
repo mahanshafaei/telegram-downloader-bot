@@ -155,6 +155,8 @@ export async function moovBeforeMdat(filePath) {
  * @property {number} [width]
  * @property {number} [height]
  * @property {number} [duration] whole seconds, for Telegram's sendVideo
+ * @property {boolean} [noVideoStream] file has audio but no video at all —
+ *   e.g. a TikTok photo post where yt-dlp could only grab the music track
  */
 
 /**
@@ -195,7 +197,9 @@ export async function ensureIosPlayable(filePath, opts = {}) {
     duration: info.duration ? Math.round(info.duration) : undefined,
   };
 
-  if (!info.vcodec) return { path: filePath, action: "ok", ...meta };
+  if (!info.vcodec) {
+    return { path: filePath, action: "ok", noVideoStream: true, ...meta };
+  }
 
   const videoOk = info.vcodec === "h264" && IOS_PIX_FMTS.has(info.pixFmt ?? "");
   const audioOk = !info.acodec || info.acodec === "aac";

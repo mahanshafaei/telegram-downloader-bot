@@ -14,10 +14,11 @@ const API = "https://api.telegram.org";
 export class Telegram {
   /**
    * @param {string} token BOT_TOKEN from BotFather
+   * @param {string} [apiBase] override for tests / self-hosted Bot API servers
    */
-  constructor(token) {
+  constructor(token, apiBase = API) {
     this.token = token;
-    this.base = `${API}/bot${token}`;
+    this.base = `${apiBase}/bot${token}`;
   }
 
   /** Low-level JSON API call. */
@@ -134,10 +135,85 @@ export class Telegram {
 
     // Uploads can be slow from a datacenter host; give them room so a large-ish
     // file isn't cut off mid-transfer (the "operation was aborted" error).
+    return this.callForm(method, form);
+  }
+
+  /**
+   * Send photos the fastest way possible: by URL. Telegram's servers fetch
+   * the images themselves, so nothing is downloaded to or uploaded from the
+   * bot host. 2–10 photos become one album (sendMediaGroup); a single photo
+   * uses sendPhoto; >10 are split into consecutive albums. Throws if
+   * Telegram can't fetch the URLs — callers fall back to sendPhotoFiles.
+   *
+   * @param {string|number} chatId
+   * @param {string[]} urls   direct image URLs
+   * @param {object} [opts]   { caption } (HTML, shown on the first photo)
+   */
+  async sendPhotoUrls(chatId, urls, opts = {}) {
+    for (const [i, chunk] of chunked(urls, 10).entries()) {
+      const caption = i === 0 ? opts.caption : undefined;
+      if (chunk.length === 1) {
+        await this.call("sendPhoto", {
+          chat_id: chatId,
+          photo: chunk[0],
+          ...(caption ? { caption, parse_mode: "HTML" } : {}),
+        });
+      } else {
+        await this.call("sendMediaGroup", {
+          chat_id: chatId,
+          media: chunk.map((url, j) => ({
+            type: "photo",
+            media: url,
+            // Caption on exactly one item = album-level caption in clients.
+            ...(caption && j === 0 ? { caption, parse_mode: "HTML" } : {}),
+          })),
+        });
+      }
+    }
+  }
+
+  /**
+   * Upload local image files as albums (multipart, attach://). Fallback for
+   * when Telegram refuses to fetch the CDN URLs itself.
+   *
+   * @param {string|number} chatId
+   * @param {string[]} files  paths to jpg/png images on disk
+   * @param {object} [opts]   { caption }
+   */
+  async sendPhotoFiles(chatId, files, opts = {}) {
+    for (const [i, chunk] of chunked(files, 10).entries()) {
+      const caption = i === 0 ? opts.caption : undefined;
+      const form = new FormData();
+      form.append("chat_id", String(chatId));
+      if (chunk.length === 1) {
+        if (caption) {
+          form.append("caption", caption);
+          form.append("parse_mode", "HTML");
+        }
+        form.append("photo", await fs.openAsBlob(chunk[0]), basename(chunk[0]));
+        await this.callForm("sendPhoto", form);
+      } else {
+        const media = [];
+        for (const [j, file] of chunk.entries()) {
+          form.append(`photo${j}`, await fs.openAsBlob(file), basename(file));
+          media.push({
+            type: "photo",
+            media: `attach://photo${j}`,
+            ...(caption && j === 0 ? { caption, parse_mode: "HTML" } : {}),
+          });
+        }
+        form.append("media", JSON.stringify(media));
+        await this.callForm("sendMediaGroup", form);
+      }
+    }
+  }
+
+  /** Multipart API call (shared by sendFile and the photo senders). */
+  async callForm(method, form, timeoutMs = 300000) {
     const res = await fetchWithTimeout(`${this.base}/${method}`, {
       method: "POST",
       body: form,
-      timeoutMs: 300000,
+      timeoutMs,
     });
     const data = await res.json().catch(() => ({}));
     if (!data.ok) {
@@ -147,6 +223,13 @@ export class Telegram {
     }
     return data.result;
   }
+}
+
+/** Split an array into consecutive chunks of at most `size` items. */
+function chunked(items, size) {
+  const out = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
 }
 
 function fieldForMethod(method) {

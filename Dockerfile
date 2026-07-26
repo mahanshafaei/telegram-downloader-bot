@@ -1,10 +1,12 @@
 # Telegram Downloader Bot — Node + yt-dlp + ffmpeg
 FROM node:20-slim
 
-# ffmpeg (stream merging + mp3 extraction) and ca-certificates for HTTPS fetches.
-# python3 is not required — we use the standalone yt-dlp binary.
+# ffmpeg (stream merging, mp3 extraction, iOS compatibility fixes) and
+# ca-certificates for HTTPS fetches. python3/pip only exist to run gallery-dl,
+# which handles photo posts (yt-dlp is the standalone binary and needs neither).
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ffmpeg ca-certificates curl \
+  && apt-get install -y --no-install-recommends ffmpeg ca-certificates curl python3 python3-pip \
+  && pip3 install --no-cache-dir --break-system-packages gallery-dl \
   && rm -rf /var/lib/apt/lists/*
 
 # Bake in the standalone yt-dlp binary so the first request doesn't wait on a
