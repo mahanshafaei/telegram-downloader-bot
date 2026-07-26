@@ -171,18 +171,24 @@ export async function probe(ytdlp, url) {
 
 const MAX_VIDEO_CHOICES = 8;
 
-// ffmpeg "-movflags +faststart" moves the moov atom to the front of the mp4.
-// iPhones need this (and H.264 video + AAC audio) to play a file and show the
-// correct aspect ratio; without it iOS shows a stuck/square video while
-// Android plays it fine. These target the Merger (when video+audio are joined)
-// and the VideoRemuxer (when the container is repackaged to mp4).
+// iPhones only play an mp4 when the moov atom is at the front of the file
+// ("-movflags +faststart") and the codecs are H.264 video + AAC audio; without
+// faststart iOS shows a stuck or square video while Android plays it fine.
+//
+// The catch: Instagram/TikTok serve a single, already-.mp4 file with the moov
+// at the END. yt-dlp's --remux-video only runs ffmpeg when the *container*
+// needs changing, so for an already-mp4 file it does nothing and faststart is
+// never applied. FFmpegCopyStream always runs a stream-copy ffmpeg pass (no
+// re-encode — fast, keeps H.264), which is where we inject +faststart. This
+// reliably fixes the moov position on every download, merged or single-file.
 const FASTSTART_PP_ARGS = [
+  "--use-postprocessor",
+  "FFmpegCopyStream",
+  "--postprocessor-args",
+  "CopyStream:-movflags +faststart",
+  // Also cover the merge case (separate video+audio) directly.
   "--postprocessor-args",
   "Merger:-movflags +faststart",
-  "--postprocessor-args",
-  "VideoRemuxer:-movflags +faststart",
-  "--postprocessor-args",
-  "VideoConvertor:-movflags +faststart",
 ];
 
 // iOS-compatible format preference: H.264 video (avc1) + AAC audio (mp4a).
@@ -204,8 +210,8 @@ function iosVideoSelector(maxHeight) {
  * Fast, iOS-safe download choice for the auto-best platforms (Instagram,
  * TikTok). Caps resolution to keep the file small enough to upload before
  * Telegram times out ("operation aborted"), prefers an H.264/AAC stream, and
- * remuxes into an mp4 with faststart (no re-encode, so it's quick on limited
- * CPU). Instagram and TikTok serve H.264, so the remux is all iOS needs.
+ * outputs an mp4 with faststart (see FASTSTART_PP_ARGS). No re-encode, so it
+ * stays quick on limited CPU.
  *
  * @param {number} [maxHeight] resolution ceiling (default 720)
  * @returns {DownloadChoice}
@@ -219,8 +225,8 @@ export function buildFastChoice(maxHeight = 720) {
       iosVideoSelector(maxHeight),
       "--merge-output-format",
       "mp4",
-      // Repackage into mp4 (no re-encode) when the source is already H.264 —
-      // fast, and paired with faststart it's all iOS needs.
+      // Ensure a non-mp4 container (e.g. webm) becomes mp4; FFmpegCopyStream
+      // below then applies faststart even when the source was already mp4.
       "--remux-video",
       "mp4",
       ...FASTSTART_PP_ARGS,
