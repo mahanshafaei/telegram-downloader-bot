@@ -132,10 +132,12 @@ export class Telegram {
     const blob = await fs.openAsBlob(filePath);
     form.append(field, blob, basename(filePath));
 
+    // Uploads can be slow from a datacenter host; give them room so a large-ish
+    // file isn't cut off mid-transfer (the "operation was aborted" error).
     const res = await fetchWithTimeout(`${this.base}/${method}`, {
       method: "POST",
       body: form,
-      timeoutMs: 120000,
+      timeoutMs: 300000,
     });
     const data = await res.json().catch(() => ({}));
     if (!data.ok) {

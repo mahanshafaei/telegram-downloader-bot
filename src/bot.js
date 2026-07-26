@@ -15,7 +15,14 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { Telegram, inlineKeyboard } from "./telegram.js";
 import { detectPlatform, isProbablyUrl, isAutoBest } from "./platforms.js";
-import { ensureYtDlp, findFfmpeg, probe, buildChoices, download } from "./ytdlp.js";
+import {
+  ensureYtDlp,
+  findFfmpeg,
+  probe,
+  buildChoices,
+  buildFastChoice,
+  download,
+} from "./ytdlp.js";
 import { extractUrl, escapeHtml, humanSize } from "./util.js";
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -155,16 +162,16 @@ async function handleMessage(msg) {
     );
   }
 
-  // Instagram / TikTok: skip the picker, grab the best video straight away.
+  // Instagram / TikTok: skip the picker and download a fast, iOS-safe file.
+  // Not the highest quality — a capped 720p H.264 mp4 that uploads quickly so
+  // Telegram doesn't abort the upload, and that iPhones can actually play.
   if (isAutoBest(link)) {
-    const best =
-      choices.find((c) => c.kind === "video") ?? choices[0];
     try {
       await runDownload(chatId, status?.message_id, {
         url: link,
         infoJsonPath: probed.infoJsonPath,
         title: probed.info.title,
-        choice: best,
+        choice: fastChoiceFor(probed.info),
       });
     } finally {
       await fs.rm(probed.infoJsonPath, { force: true }).catch(() => {});
@@ -331,6 +338,21 @@ async function reportError(chatId, status, err) {
   } else {
     await tg.sendMessage(chatId, message).catch(() => {});
   }
+}
+
+/**
+ * Choose a resolution cap for the auto-best (Instagram/TikTok) path based on
+ * video length. Longer videos are capped lower so the file stays small and the
+ * upload finishes before Telegram aborts it. Short clips keep 720p.
+ *
+ * @param {{duration?: number}} info probed metadata
+ */
+function fastChoiceFor(info) {
+  const seconds = Number(info?.duration) || 0;
+  let cap = 720;
+  if (seconds > 600) cap = 360; // 10 min+
+  else if (seconds > 180) cap = 480; // 3–10 min
+  return buildFastChoice(cap);
 }
 
 function isPrivate(msg) {

@@ -171,6 +171,63 @@ export async function probe(ytdlp, url) {
 
 const MAX_VIDEO_CHOICES = 8;
 
+// ffmpeg "-movflags +faststart" moves the moov atom to the front of the mp4.
+// iPhones need this (and H.264 video + AAC audio) to play a file and show the
+// correct aspect ratio; without it iOS shows a stuck/square video while
+// Android plays it fine. These target the Merger (when video+audio are joined)
+// and the VideoRemuxer (when the container is repackaged to mp4).
+const FASTSTART_PP_ARGS = [
+  "--postprocessor-args",
+  "Merger:-movflags +faststart",
+  "--postprocessor-args",
+  "VideoRemuxer:-movflags +faststart",
+  "--postprocessor-args",
+  "VideoConvertor:-movflags +faststart",
+];
+
+// iOS-compatible format preference: H.264 video (avc1) + AAC audio (mp4a).
+// Both Instagram and TikTok already serve H.264, so this almost always selects
+// a stream that needs no re-encoding — just a fast remux to mp4.
+function iosVideoSelector(maxHeight) {
+  const cap = maxHeight ? `[height<=${maxHeight}]` : "";
+  return (
+    // 1) H.264 + AAC within the cap — ideal, no re-encode.
+    `bv*${cap}[vcodec^=avc1]+ba[acodec^=mp4a]/` +
+    // 2) any codec within the cap, or a muxed file within the cap.
+    `bv*${cap}+ba/b${cap}/` +
+    // 3) absolute fallback: best available.
+    `bv*+ba/b`
+  );
+}
+
+/**
+ * Fast, iOS-safe download choice for the auto-best platforms (Instagram,
+ * TikTok). Caps resolution to keep the file small enough to upload before
+ * Telegram times out ("operation aborted"), prefers an H.264/AAC stream, and
+ * remuxes into an mp4 with faststart (no re-encode, so it's quick on limited
+ * CPU). Instagram and TikTok serve H.264, so the remux is all iOS needs.
+ *
+ * @param {number} [maxHeight] resolution ceiling (default 720)
+ * @returns {DownloadChoice}
+ */
+export function buildFastChoice(maxHeight = 720) {
+  return {
+    kind: "video",
+    label: `up to ${maxHeight}p · mp4`,
+    args: [
+      "-f",
+      iosVideoSelector(maxHeight),
+      "--merge-output-format",
+      "mp4",
+      // Repackage into mp4 (no re-encode) when the source is already H.264 —
+      // fast, and paired with faststart it's all iOS needs.
+      "--remux-video",
+      "mp4",
+      ...FASTSTART_PP_ARGS,
+    ],
+  };
+}
+
 /**
  * Turn a probed VideoInfo into a list of download choices, one per distinct
  * resolution plus an audio-only mp3. Ported from yoink's buildChoices, with
@@ -211,9 +268,15 @@ export function buildChoices(info) {
       size: size || undefined,
       args: [
         "-f",
-        `bv*[height=${height}]+ba/b[height=${height}]/bv*[height<=${height}]+ba/b`,
+        // Prefer H.264+AAC at this height (iOS-friendly), then any codec at
+        // this height, then a lower one.
+        `bv*[height=${height}][vcodec^=avc1]+ba[acodec^=mp4a]/` +
+          `bv*[height=${height}]+ba/b[height=${height}]/bv*[height<=${height}]+ba/b`,
         "--merge-output-format",
         "mp4",
+        "--remux-video",
+        "mp4",
+        ...FASTSTART_PP_ARGS,
       ],
     });
   }
@@ -222,7 +285,15 @@ export function buildChoices(info) {
     choices.push({
       kind: "video",
       label: "best available · mp4",
-      args: ["-f", "bv*+ba/b", "--merge-output-format", "mp4"],
+      args: [
+        "-f",
+        iosVideoSelector(),
+        "--merge-output-format",
+        "mp4",
+        "--remux-video",
+        "mp4",
+        ...FASTSTART_PP_ARGS,
+      ],
     });
   }
 
