@@ -111,11 +111,15 @@ export async function findFfmpeg() {
  * Probe a link for its metadata and available formats via `yt-dlp -J`.
  * @param {string} ytdlp
  * @param {string} url
+ * @param {string} [cookiesFile] Netscape cookies.txt (Instagram needs login)
  * @returns {Promise<{ info: VideoInfo, infoJsonPath: string }>}
  */
-export async function probe(ytdlp, url) {
+export async function probe(ytdlp, url, cookiesFile) {
   const stdout = await new Promise((resolve, reject) => {
-    const child = spawn(ytdlp, ["-J", "--no-playlist", "--no-warnings", url]);
+    const args = ["-J", "--no-playlist", "--no-warnings"];
+    if (cookiesFile) args.push("--cookies", cookiesFile);
+    args.push(url);
+    const child = spawn(ytdlp, args);
     let out = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => (out += chunk));
@@ -362,6 +366,7 @@ export const MAX_FILESIZE_ERROR = "MAX_FILESIZE_EXCEEDED";
  * @param {DownloadChoice} opts.choice
  * @param {string} opts.outDir
  * @param {number} [opts.maxFilesizeMb]  abort if yt-dlp sees a bigger file
+ * @param {string} [opts.cookiesFile]    Netscape cookies.txt for login-walled sites
  * @param {Object} [handlers]
  * @param {(p: DownloadProgress) => void} [handlers.onProgress]
  * @param {() => void} [handlers.onProcessing]
@@ -398,6 +403,9 @@ export function download(opts, handlers = {}) {
   }
   if (opts.ffmpegLocation) {
     args.push("--ffmpeg-location", opts.ffmpegLocation);
+  }
+  if (opts.cookiesFile) {
+    args.push("--cookies", opts.cookiesFile);
   }
 
   return new Promise((resolve, reject) => {

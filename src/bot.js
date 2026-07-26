@@ -57,6 +57,35 @@ let ytdlp;
 let ffmpegLocation;
 let ffprobeLocation;
 let galleryDl;
+let cookiesFile;
+
+// Netscape cookies.txt passed to both yt-dlp and gallery-dl (Instagram needs
+// login cookies for most anonymous-blocked content). Either set COOKIES_FILE
+// or just drop the file at the default path.
+const DEFAULT_COOKIES_PATHS = [
+  "/etc/tgdl-bot/cookies.txt",
+  path.join(os.homedir(), ".config", "tgdl-bot", "cookies.txt"),
+];
+
+async function findCookiesFile() {
+  const fromEnv = process.env.COOKIES_FILE;
+  if (fromEnv) {
+    try {
+      await fs.access(fromEnv);
+      return fromEnv;
+    } catch {
+      console.warn(`COOKIES_FILE is set but not readable: ${fromEnv}`);
+      return undefined;
+    }
+  }
+  for (const p of DEFAULT_COOKIES_PATHS) {
+    try {
+      await fs.access(p);
+      return p;
+    } catch {}
+  }
+  return undefined;
+}
 
 // Pending download choices, keyed by a short token embedded in callback_data.
 // Telegram limits callback_data to 64 bytes, so we can't stuff a URL in there.
@@ -114,6 +143,12 @@ async function main() {
       "gallery-dl not found — photo posts disabled. Install it with: pip3 install --break-system-packages gallery-dl"
     );
   }
+  cookiesFile = await findCookiesFile();
+  console.log(
+    cookiesFile
+      ? `cookies: ${cookiesFile} (passed to yt-dlp and gallery-dl)`
+      : `cookies: none (Instagram may block anonymous access — put a cookies.txt at ${DEFAULT_COOKIES_PATHS[0]})`
+  );
 
   const me = await tg.call("getMe", {}).catch(() => null);
   if (me) console.log(`Logged in as @${me.username}. Polling…`);
@@ -232,7 +267,7 @@ async function handleMessage(msg) {
 
   let probed;
   try {
-    probed = await probe(ytdlp, link);
+    probed = await probe(ytdlp, link, cookiesFile);
   } catch (err) {
     // yt-dlp can't handle image posts (tweets with photos, Pinterest pins…);
     // before giving up, see if gallery-dl finds pictures in the link.
@@ -367,6 +402,7 @@ async function performDownload(chatId, messageId, job) {
         choice,
         outDir: workDir,
         maxFilesizeMb: MAX_FILESIZE_MB,
+        cookiesFile,
       },
       {
         onProgress: (p) => {
@@ -470,7 +506,7 @@ async function reportError(chatId, status, err) {
 async function autoBestSmaller(chatId, status, link) {
   let probed;
   try {
-    probed = await probe(ytdlp, link);
+    probed = await probe(ytdlp, link, cookiesFile);
   } catch (err) {
     return reportError(chatId, status, err);
   }
@@ -550,7 +586,7 @@ async function tryPhotoPost(chatId, status, link) {
 
   let post;
   try {
-    post = await fetchPhotoPost(galleryDl, link);
+    post = await fetchPhotoPost(galleryDl, link, { cookiesFile });
   } catch (err) {
     return { sent: false, error: err };
   }

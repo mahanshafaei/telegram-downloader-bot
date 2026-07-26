@@ -138,6 +138,17 @@ const nonIg = await fetchPhotoPost(stub, "https://www.tiktok.com/@x/photo/1").ca
 check("no GraphQL retry for non-Instagram", nonIg instanceof Error && /401 Unauthorized/.test(nonIg.message),
   String(nonIg && (nonIg.message ?? JSON.stringify(nonIg))));
 
+// cookiesFile must reach gallery-dl as --cookies <file> on every attempt.
+console.log("▶ cookies file forwarding");
+await fs.writeFile(stub, `#!/usr/bin/env node
+if (process.argv.includes("--version")) { console.log("stub"); process.exit(0); }
+const i = process.argv.indexOf("--cookies");
+if (i === -1 || !process.argv[i + 1]) { console.error("[t][error] x: missing --cookies"); process.stdout.write("[]"); process.exit(0); }
+process.stdout.write(JSON.stringify([[3, "https://cdn.example/c.jpg", { type: "image" }]]));
+`);
+const withCookies = await fetchPhotoPost(stub, "https://www.instagram.com/p/x/", { cookiesFile: "/tmp/cookies.txt" });
+check("--cookies forwarded to gallery-dl", withCookies.urls.length === 1, JSON.stringify(withCookies));
+
 // A stalled gallery-dl (e.g. Instagram 429 wait loops) must be killed by the
 // timeout, surfacing its last log line — never hang the chat forever.
 console.log("▶ gallery-dl stall → hard timeout");

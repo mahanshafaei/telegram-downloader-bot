@@ -91,25 +91,15 @@ All configuration is via environment variables. Only `BOT_TOKEN` is required.
 
 See [`.env.example`](.env.example) for a template.
 
-### Instagram photo posts
+### Instagram cookies (one file for yt-dlp AND gallery-dl)
 
-Instagram rate-limits anonymous access aggressively (`429 Too Many Requests`), so photo posts may fail until you give gallery-dl login cookies:
+Instagram blocks most anonymous access (`401 Unauthorized`, `429 Too Many Requests`), for videos and photos alike. The fix is one cookies file, which the bot automatically passes to **both** yt-dlp and gallery-dl:
 
-1. In a browser where you're logged in to Instagram, export cookies with a "cookies.txt" extension (Netscape format).
-2. Put the file on the server, e.g. `/etc/tgdl-bot-instagram-cookies.txt`.
-3. Create `~/.config/gallery-dl/config.json` for the user the bot runs as (for the systemd setup below that's `root`):
+1. In a browser where you're logged in to Instagram (a throwaway account is fine — Instagram may flag accounts used for scraping), export cookies with a "Get cookies.txt"-style extension (Netscape format).
+2. Put the file at `/etc/tgdl-bot/cookies.txt` on the server (or set `COOKIES_FILE` to wherever you keep it).
+3. Restart the bot. The startup log shows `cookies: /etc/tgdl-bot/cookies.txt (passed to yt-dlp and gallery-dl)` when it's picked up.
 
-```json
-{
-  "extractor": {
-    "instagram": {
-      "cookies": "/etc/tgdl-bot-instagram-cookies.txt"
-    }
-  }
-}
-```
-
-No bot restart needed — gallery-dl reads the config on every call. TikTok photo posts work without any of this.
+Keep the file out of git — a committed session cookie in a public repo will be harvested and the session killed within hours. TikTok works without any of this.
 
 ---
 

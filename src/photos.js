@@ -66,11 +66,14 @@ const IMAGE_EXT_RE = /\.(jpe?g|png|webp|gif|heic|avif)(\?|$)/i;
  *
  * @param {string} galleryDl command from findGalleryDl()
  * @param {string} url       post URL
- * @param {{timeoutMs?: number}} [opts]  total budget across attempts
+ * @param {{timeoutMs?: number, cookiesFile?: string}} [opts]  timeoutMs is the
+ *   total budget across attempts; cookiesFile is a Netscape cookies.txt
+ *   (Instagram in particular usually needs login cookies)
  * @returns {Promise<PhotoPost>} urls is empty when the post has no images
  */
 export async function fetchPhotoPost(galleryDl, url, opts = {}) {
   const totalTimeoutMs = opts.timeoutMs ?? 50_000;
+  const baseArgs = opts.cookiesFile ? ["--cookies", opts.cookiesFile] : [];
   const attempts = [[]];
   try {
     if (new URL(url).hostname.includes("instagram")) {
@@ -82,7 +85,7 @@ export async function fetchPhotoPost(galleryDl, url, opts = {}) {
   let lastError;
   for (const extraArgs of attempts) {
     try {
-      const post = await runGalleryDl(galleryDl, url, extraArgs, perAttemptMs);
+      const post = await runGalleryDl(galleryDl, url, [...baseArgs, ...extraArgs], perAttemptMs);
       if (post.urls.length) return post;
     } catch (err) {
       lastError = err;
