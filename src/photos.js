@@ -54,20 +54,47 @@ const IMAGE_EXT_RE = /\.(jpe?g|png|webp|gif|heic|avif)(\?|$)/i;
  * yield the slideshow's background music as a file with metadata.type
  * "audio" — that (and covers/subtitles) must be filtered out.
  *
+ * gallery-dl can stall for a very long time — e.g. Instagram rate limiting
+ * makes it print "Waiting for N minutes…" and sleep, repeatedly. The hard
+ * timeout below kills it so a chat never hangs on "Fetching photos…" forever.
+ *
  * @param {string} galleryDl command from findGalleryDl()
  * @param {string} url       post URL
+ * @param {{timeoutMs?: number}} [opts]
  * @returns {Promise<PhotoPost>} urls is empty when the post has no images
  */
-export async function fetchPhotoPost(galleryDl, url) {
-  const { code, stdout, stderr } = await new Promise((resolve, reject) => {
-    const child = spawn(galleryDl, ["-j", "--", url]);
-    let out = "";
-    let err = "";
-    child.stdout.on("data", (c) => (out += c));
-    child.stderr.on("data", (c) => (err += c));
-    child.on("error", reject);
-    child.on("close", (c) => resolve({ code: c, stdout: out, stderr: err }));
-  });
+export async function fetchPhotoPost(galleryDl, url, opts = {}) {
+  const timeoutMs = opts.timeoutMs ?? 45_000;
+  const { code, stdout, stderr, timedOut } = await new Promise(
+    (resolve, reject) => {
+      // -R 1: one retry is enough; failures should surface, not loop.
+      const child = spawn(galleryDl, ["-R", "1", "-j", "--", url]);
+      let out = "";
+      let err = "";
+      let killed = false;
+      const timer = setTimeout(() => {
+        killed = true;
+        child.kill("SIGKILL");
+      }, timeoutMs);
+      timer.unref?.();
+      child.stdout.on("data", (c) => (out += c));
+      child.stderr.on("data", (c) => (err += c));
+      child.on("error", (e) => {
+        clearTimeout(timer);
+        reject(e);
+      });
+      child.on("close", (c) => {
+        clearTimeout(timer);
+        resolve({ code: c, stdout: out, stderr: err, timedOut: killed });
+      });
+    }
+  );
+  if (timedOut) {
+    throw new Error(
+      lastInfoLine(stderr) ||
+        `Timed out fetching photos (${Math.round(timeoutMs / 1000)}s).`
+    );
+  }
 
   let entries;
   try {
@@ -125,6 +152,18 @@ function cleanGalleryDlError(stderr) {
     .filter((l) => /\[error\]/i.test(l))
     .at(-1);
   return line ? line.replace(/^\[[^\]]*\]\[[^\]]*\]\s*/, "").replace(/^https?:\S+:\s*/, "") : "";
+}
+
+// On timeout the most useful thing gallery-dl said is usually an [info]/
+// [warning] line like "Waiting for 1 minutes until 22:32 (429 Too Many
+// Requests)" — surface that instead of a bare "timed out".
+function lastInfoLine(stderr) {
+  const line = stderr
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => /\[(info|warning|error)\]/i.test(l))
+    .at(-1);
+  return line ? line.replace(/^\[[^\]]*\]\[[^\]]*\]\s*/, "") : "";
 }
 
 // Some CDNs refuse requests without a browsery user agent.

@@ -91,6 +91,26 @@ All configuration is via environment variables. Only `BOT_TOKEN` is required.
 
 See [`.env.example`](.env.example) for a template.
 
+### Instagram photo posts
+
+Instagram rate-limits anonymous access aggressively (`429 Too Many Requests`), so photo posts may fail until you give gallery-dl login cookies:
+
+1. In a browser where you're logged in to Instagram, export cookies with a "cookies.txt" extension (Netscape format).
+2. Put the file on the server, e.g. `/etc/tgdl-bot-instagram-cookies.txt`.
+3. Create `~/.config/gallery-dl/config.json` for the user the bot runs as (for the systemd setup below that's `root`):
+
+```json
+{
+  "extractor": {
+    "instagram": {
+      "cookies": "/etc/tgdl-bot-instagram-cookies.txt"
+    }
+  }
+}
+```
+
+No bot restart needed — gallery-dl reads the config on every call. TikTok photo posts work without any of this.
+
 ---
 
 ## 🛠️ Local development

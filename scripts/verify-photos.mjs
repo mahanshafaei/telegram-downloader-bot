@@ -79,6 +79,21 @@ process.exit(1);
 const err = await fetchPhotoPost(stub, "https://x").catch((e) => e);
 check("extractor error surfaced", err instanceof Error && /Login required/.test(err.message), String(err && err.message));
 
+// A stalled gallery-dl (e.g. Instagram 429 wait loops) must be killed by the
+// timeout, surfacing its last log line — never hang the chat forever.
+console.log("▶ gallery-dl stall → hard timeout");
+await fs.writeFile(stub, `#!/usr/bin/env node
+if (process.argv.includes("--version")) { console.log("stub"); process.exit(0); }
+console.error("[instagram][info] Waiting for 1 minutes until 22:32:22 (429 Too Many Requests)");
+setTimeout(() => {}, 120000); // hang
+`);
+const t0 = Date.now();
+const stallErr = await fetchPhotoPost(stub, "https://instagram.com/p/x", { timeoutMs: 1500 }).catch((e) => e);
+check("stall killed within timeout", stallErr instanceof Error && Date.now() - t0 < 10000,
+  `took ${Date.now() - t0}ms: ${String(stallErr && stallErr.message)}`);
+check("timeout error carries the useful log line", /429 Too Many Requests/.test(String(stallErr && stallErr.message)),
+  String(stallErr && stallErr.message));
+
 // ---------------------------------------------------------------------------
 // 2. Telegram album senders against a stub Bot API.
 // ---------------------------------------------------------------------------

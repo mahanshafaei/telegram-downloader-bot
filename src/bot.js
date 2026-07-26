@@ -146,10 +146,30 @@ async function pollLoop() {
   }
 }
 
+// Guard against processing the same message twice. Telegram re-delivers a
+// message as an edited_message update when its link preview attaches (and can
+// redeliver updates after connection hiccups) — without this, one link was
+// downloaded twice in parallel.
+const seenMessages = new Set();
+function alreadyHandled(msg) {
+  const key = `${msg.chat?.id}:${msg.message_id}`;
+  if (seenMessages.has(key)) return true;
+  seenMessages.add(key);
+  if (seenMessages.size > 1000) {
+    for (const k of seenMessages) {
+      seenMessages.delete(k);
+      if (seenMessages.size <= 500) break;
+    }
+  }
+  return false;
+}
+
 async function handleUpdate(update) {
   if (update.callback_query) return handleCallback(update.callback_query);
-  const msg = update.message || update.edited_message;
-  if (msg) return handleMessage(msg);
+  // Deliberately NOT update.edited_message: an "edit" is usually just the
+  // link preview arriving on a message we already processed.
+  const msg = update.message;
+  if (msg && !alreadyHandled(msg)) return handleMessage(msg);
 }
 
 async function handleMessage(msg) {
@@ -205,13 +225,7 @@ async function handleMessage(msg) {
       // nothing at all). If gallery-dl finds images, send those instead.
       const photo = await tryPhotoPost(chatId, status, link);
       if (photo.sent) return;
-      await reportError(
-        chatId,
-        status,
-        err.message === NO_VIDEO_STREAM
-          ? new Error("That post doesn't seem to contain a downloadable video or photos.")
-          : err
-      );
+      await reportError(chatId, status, pickBestError(err, photo.error, link));
     }
     return;
   }
@@ -224,7 +238,7 @@ async function handleMessage(msg) {
     // before giving up, see if gallery-dl finds pictures in the link.
     const photo = await tryPhotoPost(chatId, status, link);
     if (photo.sent) return;
-    return reportError(chatId, status, err);
+    return reportError(chatId, status, pickBestError(err, photo.error, link));
   }
 
   const choices = buildChoices(probed.info);
@@ -480,6 +494,34 @@ async function autoBestSmaller(chatId, status, link) {
   } finally {
     await fs.rm(probed.infoJsonPath, { force: true }).catch(() => {});
   }
+}
+
+// yt-dlp errors that mean "this link isn't a video" rather than "the
+// download broke" — for those, the photo attempt's failure is the real story.
+const NOT_A_VIDEO_RE =
+  /no video|there is no video|no downloadable formats|unsupported url|empty media response/i;
+
+/**
+ * After both the video and the photo attempt failed, pick the error the user
+ * should actually see. A "no video in this post" from yt-dlp on a photo post
+ * is noise — surface why the PHOTOS couldn't be fetched instead, with a
+ * cookies hint for Instagram (which rate-limits anonymous access hard).
+ */
+function pickBestError(videoErr, photoErr, link) {
+  const looksLikePhotoPost =
+    videoErr.message === NO_VIDEO_STREAM || NOT_A_VIDEO_RE.test(videoErr.message);
+  if (!looksLikePhotoPost) return videoErr;
+  if (!photoErr) {
+    return new Error("That post doesn't seem to contain a downloadable video or photos.");
+  }
+  let hint = "";
+  try {
+    if (new URL(link).hostname.includes("instagram")) {
+      hint =
+        " — Instagram often rate-limits or blocks anonymous photo fetching; adding Instagram login cookies to gallery-dl on the server makes this reliable (see README → Instagram photo posts).";
+    }
+  } catch {}
+  return new Error(`Couldn't fetch the post's photos: ${photoErr.message}${hint}`);
 }
 
 /**

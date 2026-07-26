@@ -50,7 +50,9 @@ export class Telegram {
       body: JSON.stringify({
         offset,
         timeout,
-        allowed_updates: ["message", "edited_message", "callback_query"],
+        // No edited_message: Telegram "edits" a message when its link preview
+        // attaches, which would make the bot process the same link twice.
+        allowed_updates: ["message", "callback_query"],
       }),
       // a touch longer than the long-poll timeout so the socket doesn't drop
       timeoutMs: (timeout + 10) * 1000,

@@ -1,0 +1,1 @@
+{"id":"h2","title":"hls manual","extractor":"Instagram","extractor_key":"Instagram","webpage_url":"https://www.instagram.com/reel/h2/","duration":10,"formats":[{"format_id":"hls-2500","url":"http://127.0.0.1:8099/index.m3u8","ext":"mp4","protocol":"m3u8_native","vcodec":"avc1.64001f","acodec":"mp4a.40.2","width":1280,"height":720}]}
